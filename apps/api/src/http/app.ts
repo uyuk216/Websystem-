@@ -9,11 +9,12 @@ import { registerAccount } from '../auth/accounts.js';
 import { recordLogin, listLoginEvents } from '../auth/login-history.js';
 import { startPasskeyRegistration, finishPasskeyRegistration, startPasskeyLogin, finishPasskeyLogin } from '../auth/passkeys.js';
 import { acceptInvite, changeRole, createTeam, deleteTeam, getTeam, inviteMember, leaveTeam, listTeams, removeMember, transferOwnership } from '../teams/teams.js';
-import { createSession } from '../auth/sessions.js';
+import { UUID } from '../auth/cross-device.js';
+import { createSession, listSessions, revokeSession } from '../auth/sessions.js';
 import { randomBytes } from 'node:crypto';
 import { getCookie, setCookie } from 'hono/cookie';
 import type { Locale } from 'i18n';
-import { rateLimit, requireSession, setSessionCookie } from './middleware.js';
+import { clearSessionCookie, rateLimit, requireSession, setSessionCookie } from './middleware.js';
 
 export const DEVICE_COOKIE = 'did';
 const asLocale = (v: unknown): Locale => (v === 'en' ? 'en' : 'ja');
@@ -235,6 +236,21 @@ export function createApp(deps?: AppDeps): Hono {
       if (!str(b?.toAccountId, 64)) return c.json({ error: 'invalid' }, 400);
       const r = await transferOwnership(deps.db, c.req.param('id'), c.get('accountId'), b.toAccountId);
       return 'error' in r ? teamErr(c, r.error) : c.json(r);
+    });
+    app.post('/auth/logout', session, async (c) => {
+      await revokeSession(deps.db, c.get('accountId'), c.get('sessionId'));
+      clearSessionCookie(c);
+      return c.json({ ok: true });
+    });
+    app.get('/me/sessions', session, async (c) => {
+      const current = c.get('sessionId');
+      const rows = await listSessions(deps.db, c.get('accountId'));
+      return c.json({ sessions: rows.map((r) => ({ ...r, current: r.id === current })) });
+    });
+    app.delete('/me/sessions/:id', session, async (c) => {
+      if (!UUID.test(c.req.param('id'))) return c.json({ error: 'invalid' }, 400);
+      await revokeSession(deps.db, c.get('accountId'), c.req.param('id'));
+      return c.json({ ok: true });
     });
     app.get('/me/logins', session, async (c) => c.json({ events: await listLoginEvents(deps.db, c.get('accountId')) }));
   }
