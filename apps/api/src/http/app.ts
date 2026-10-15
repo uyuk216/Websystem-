@@ -16,6 +16,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { JOBS, type Storage } from 'platform';
 import { STATIC_LIMITS } from 'shared';
 import { createDeployment, listDeployments, rollback, type JobQueue } from '../apps/deployments.js';
+import { getUsage } from '../usage/transfer.js';
 import { createApp as createAppRecord, deleteApp, getApp, listApps, updateApp } from '../apps/apps.js';
 import { createSession, listSessions, revokeSession } from '../auth/sessions.js';
 import { randomBytes } from 'node:crypto';
@@ -258,6 +259,10 @@ export function createApp(deps?: AppDeps): Hono {
     app.get('/apps/:id', session, async (c) => {
       const a = await getApp(deps.db, c.get('accountId'), c.req.param('id'));
       return a ? c.json(a) : c.json({ error: 'not_found' }, 404);
+    });
+    app.get('/apps/:id/usage', session, async (c) => {
+      const u = await getUsage(deps.db, c.get('accountId'), c.req.param('id'));
+      return u ? c.json(u) : c.json({ error: 'not_found' }, 404);
     });
     app.patch('/apps/:id', session, async (c) => {
       const b = await jsonBody(c);

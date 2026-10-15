@@ -5,7 +5,7 @@ import { DEPLOY_RETRY_LIMIT, JOBS, type JobName, type PgBoss, type Storage } fro
 export type JobHandler = (data: unknown, ctx?: { lastAttempt: boolean }) => Promise<void>;
 export type Handlers = Record<JobName, JobHandler>;
 
-/** Job handlers. `flushTransfer` is still a placeholder (Task 5). */
+/** Job handlers. (Transfer counters are flushed by the static server itself, not by a job.) */
 export function defaultHandlers(deps?: { db: Db; storage: Storage }): Handlers {
   const todo = (name: string): JobHandler => async () => {
     console.warn(`worker: no handler implemented for ${name}`);
@@ -13,7 +13,6 @@ export function defaultHandlers(deps?: { db: Db; storage: Storage }): Handlers {
   return {
     [JOBS.processDeployment]: deps ? makeProcessDeployment(deps) : todo(JOBS.processDeployment),
     [JOBS.deleteAppStorage]: deps ? makeDeleteAppStorage(deps) : todo(JOBS.deleteAppStorage),
-    [JOBS.flushTransfer]: todo(JOBS.flushTransfer),
   };
 }
 

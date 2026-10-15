@@ -6,6 +6,9 @@
   "exports": {
     ".": "./src/server.ts",
     "./db": "./src/db/client.ts",
+    "./apps": "./src/apps/apps.ts",
+    "./transfer": "./src/usage/transfer.ts",
+    "./mailer": "./src/mail/mailer.ts",
     "./deployments": "./src/apps/deployments.ts",
     "./publish": "./src/ingest/publish.ts"
   },
