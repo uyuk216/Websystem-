@@ -1,0 +1,1 @@
+ALTER TABLE "accounts" ADD CONSTRAINT "accounts_adult_from_format_check" CHECK ("accounts"."adult_from" ~ '^[0-9]{4}-(0[1-9]|1[0-2])$');

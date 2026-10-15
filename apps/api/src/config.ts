@@ -21,6 +21,13 @@ function key32(env: NodeJS.ProcessEnv, name: string): Buffer {
   return buf;
 }
 
+function parsePort(raw: string | undefined): number {
+  if (raw === undefined || raw === '') return 3001;
+  const n = Number(raw);
+  if (!/^\d+$/.test(raw) || n < 1 || n > 65535) throw new Error('PORT must be an integer 1-65535');
+  return n;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   return {
     databaseUrl: required(env, 'DATABASE_URL'),
@@ -30,6 +37,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     smtpUrl: required(env, 'SMTP_URL'),
     adminEmail: required(env, 'ADMIN_EMAIL'),
     rpId: required(env, 'RP_ID'),
-    port: Number(env.PORT ?? 3001),
+    port: parsePort(env.PORT),
   };
 }

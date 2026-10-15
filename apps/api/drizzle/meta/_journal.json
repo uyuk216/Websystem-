@@ -8,6 +8,13 @@
       "when": 1792063459474,
       "tag": "0000_jittery_mimic",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792063558999,
+      "tag": "0001_talented_naoko",
+      "breakpoints": true
     }
   ]
 }

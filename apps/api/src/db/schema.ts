@@ -16,7 +16,9 @@ export const accounts = pgTable('accounts', {
   adultFrom: text('adult_from').notNull(),
   recoveryCodeHash: text('recovery_code_hash'),
   createdAt: createdAt(),
-});
+}, (t) => [
+  check('accounts_adult_from_format_check', sql`${t.adultFrom} ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'`),
+]);
 
 export const sessions = pgTable('sessions', {
   id: id(),

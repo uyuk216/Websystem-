@@ -3,6 +3,7 @@
  * Each call creates a uniquely named database, runs migrations into it, then drops it.
  */
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
@@ -23,7 +24,7 @@ export async function withTestDb<T>(fn: (db: TestDb) => Promise<T>): Promise<T> 
   const sql = postgres(u.toString(), { max: 1, onnotice: () => {} });
   try {
     const db = drizzle(sql, { schema });
-    await migrate(db, { migrationsFolder: new URL('../../drizzle', import.meta.url).pathname });
+    await migrate(db, { migrationsFolder: fileURLToPath(new URL('../../drizzle', import.meta.url)) });
     return await fn(db);
   } finally {
     await sql.end();

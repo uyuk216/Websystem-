@@ -40,6 +40,10 @@ describe('loadConfig', () => {
   it('rejects wrong key length', () => {
     expect(() => loadConfig({ ...valid, EMAIL_ENC_KEY: Buffer.alloc(16).toString('base64') })).toThrow(/EMAIL_ENC_KEY/);
   });
+  it('rejects invalid PORT', () => {
+    for (const p of ['0', '65536', 'abc', '1.5', '-1']) expect(() => loadConfig({ ...valid, PORT: p })).toThrow(/PORT/);
+    expect(loadConfig({ ...valid, PORT: '8080' }).port).toBe(8080);
+  });
   it('parses valid env', () => {
     const c = loadConfig(valid);
     expect(c.emailEncKey.length).toBe(32);
