@@ -47,3 +47,39 @@ export async function deploy(o: Base & { dir: string; app: string; out: Out }): 
   o.out.log(`Deployment ${body.deploymentId} queued.`);
   return { deploymentId: body.deploymentId, fileCount: files.length };
 }
+
+async function appId(b: Base, name: string): Promise<string> {
+  const app = (await listApps(b)).find((a) => a.name === name);
+  if (!app) throw new Error(`App "${name}" not found.`);
+  return app.id;
+}
+
+async function envRequest(b: Base, method: string, path: string, body?: unknown): Promise<Response> {
+  const res = await (b.fetch ?? fetch)(url(b.api, path), {
+    method,
+    headers: body === undefined ? headers(b.token) : { ...headers(b.token), 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (res.status === 401) throw new Error('Not authorized. Run `yourservice login` with a valid API token.');
+  return res;
+}
+
+export async function envList(b: Base & { app: string }): Promise<{ name: string; updatedAt: string }[]> {
+  const res = await envRequest(b, 'GET', `/apps/${await appId(b, b.app)}/env`);
+  if (!res.ok) throw new Error(`Request failed (${res.status})`);
+  return (await res.json() as { vars: { name: string; updatedAt: string }[] }).vars;
+}
+
+export async function envSet(b: Base & { app: string; name: string; value: string }): Promise<void> {
+  const res = await envRequest(b, 'PUT', `/apps/${await appId(b, b.app)}/env/${encodeURIComponent(b.name)}`, { value: b.value });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(`Could not set ${b.name}: ${e.error ?? res.status}`);
+  }
+}
+
+export async function envUnset(b: Base & { app: string; name: string }): Promise<void> {
+  const res = await envRequest(b, 'DELETE', `/apps/${await appId(b, b.app)}/env/${encodeURIComponent(b.name)}`);
+  if (res.status === 404) throw new Error(`${b.name} is not set.`);
+  if (!res.ok) throw new Error(`Request failed (${res.status})`);
+}

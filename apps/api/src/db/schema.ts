@@ -218,3 +218,11 @@ export const githubDeliveries = pgTable('github_deliveries', {
   deliveryId: text('delivery_id').primaryKey(),
   receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const appEnvVars = pgTable('app_env_vars', {
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  /** base64(iv | tag | ciphertext), AES-256-GCM with appId+name as associated data. */
+  valueEnc: text('value_enc').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.appId, t.name] })]);

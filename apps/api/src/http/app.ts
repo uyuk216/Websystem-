@@ -17,6 +17,7 @@ import { JOBS, type Storage } from 'platform';
 import { STATIC_LIMITS } from 'shared';
 import { createDeployment, listDeployments, rollback, type JobQueue } from '../apps/deployments.js';
 import { createApp as createAppRecord, deleteApp, getApp, listApps, listOwners, updateApp } from '../apps/apps.js';
+import { deleteEnvVar, listEnvVars, setEnvVar, type EnvError } from '../apps/env-vars.js';
 import { createApiToken, listApiTokens, revokeApiToken } from '../apps/api-tokens.js';
 import { claimDelivery, deployPush, findPushTargets, parsePush, releaseDelivery, verifyWebhook } from '../github/webhook.js';
 import { completeConnect, setGithub, startConnect } from '../github/link.js';
@@ -43,7 +44,7 @@ const deviceLabel = (c: Context): string => coarseDeviceLabel(c.req.header('user
 export interface AppDeps {
   db: Db;
   mailer: Mailer;
-  config: RecoveryRequestConfig & { emailEncKey: Buffer; appOrigin: string; rpId: string };
+  config: RecoveryRequestConfig & { emailEncKey: Buffer; appEnvKey?: Buffer; appOrigin: string; rpId: string };
   trustedProxyHops?: number;
   /** Object storage and job queue; deployment routes and storage cleanup are enabled when both are given. */
   storage?: Storage;
@@ -331,6 +332,24 @@ export function createApp(deps?: AppDeps): Hono {
       app.post('/apps/:id/deployments/:did/rollback', session, async (c) => {
         const r = await rollback(deps.db, c.get('accountId'), c.req.param('id'), c.req.param('did'));
         return 'error' in r ? c.json({ error: r.error }, depStatus[r.error]) : c.json(r);
+      });
+    }
+    const appEnvKey = deps.config.appEnvKey;
+    if (appEnvKey) {
+      const envStatus: Record<EnvError, 400 | 403 | 404 | 413> = { not_found: 404, forbidden: 403, invalid_name: 400, reserved: 400, invalid_value: 400, too_large: 413, limit: 400 };
+      app.get('/apps/:id/env', session, async (c) => {
+        const r = await listEnvVars(deps.db, c.get('accountId'), c.req.param('id'));
+        return Array.isArray(r) ? c.json({ vars: r }) : c.json(r, 404);
+      });
+      app.put('/apps/:id/env/:name', session, bodyLimit({ maxSize: 40 * 1024, onError: (c) => c.json({ error: 'too_large' }, 413) }), async (c) => {
+        const b = await jsonBody(c);
+        if (typeof b?.value !== 'string') return c.json({ error: 'invalid_value' }, 400);
+        const r = await setEnvVar(deps.db, appEnvKey, c.get('accountId'), c.req.param('id'), c.req.param('name'), b.value);
+        return 'error' in r ? c.json({ error: r.error }, envStatus[r.error]) : c.json({ ok: true });
+      });
+      app.delete('/apps/:id/env/:name', session, async (c) => {
+        const r = await deleteEnvVar(deps.db, c.get('accountId'), c.req.param('id'), c.req.param('name'));
+        return 'error' in r ? c.json({ error: r.error }, envStatus[r.error]) : c.json({ ok: true });
       });
     }
     app.get('/me/tokens', cookieSession, async (c) => c.json({ tokens: await listApiTokens(deps.db, c.get('accountId')) }));

@@ -2,6 +2,8 @@ export interface Config {
   databaseUrl: string;
   emailEncKey: Buffer;
   emailHashKey: Buffer;
+  /** AES-256-GCM key for app environment variables (APP_ENV_KEY); env-var routes are disabled when unset. */
+  appEnvKey?: Buffer;
   appOrigin: string;
   smtpUrl: string;
   mailFrom: string;
@@ -52,6 +54,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     databaseUrl: required(env, 'DATABASE_URL'),
     emailEncKey: key32(env, 'EMAIL_ENC_KEY'),
     emailHashKey: key32(env, 'EMAIL_HASH_KEY'),
+    appEnvKey: env.APP_ENV_KEY ? key32(env, 'APP_ENV_KEY') : undefined,
     appOrigin: required(env, 'APP_ORIGIN'),
     smtpUrl: required(env, 'SMTP_URL'),
     mailFrom: env.MAIL_FROM || 'no-reply@localhost',
