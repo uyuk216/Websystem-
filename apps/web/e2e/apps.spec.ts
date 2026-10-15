@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { newEmail, signUp } from './helpers';
+import { randomBytes } from 'node:crypto';
 import { makeZip } from './zip';
 
 test.use({ locale: 'en-US' });
@@ -60,30 +61,46 @@ test('rejects non-zip uploads', async ({ page }) => {
   await createApp(page, appName());
   await page.getByLabel('ZIP file').setInputFiles(await makeZip({ 'index.html': 'x' }, 'site.txt'));
   await page.getByRole('button', { name: 'Upload ZIP' }).click();
-  await expect(page.locator('p.error')).toHaveText('Choose a ZIP file.');
+  await expect(page.locator('p.error')).toHaveText('Please choose a ZIP file.');
 });
 
-// Blocked until Task 7 (API tokens) is merged: GET/POST /me/tokens and DELETE /me/tokens/:id do not exist yet.
-test.fixme('token is shown only once', async ({ page }) => {
+test('too-large upload shows the size error and re-enables the button', async ({ page }) => {
+  await signUp(page, newEmail(), 'en');
+  await createApp(page, appName());
+  // The e2e API runs with UPLOAD_MAX_BYTES=100000; random data does not compress below it.
+  const path = await makeZip({ 'index.html': randomBytes(200_000).toString('latin1') });
+  await page.getByLabel('ZIP file').setInputFiles(path);
+  await page.getByRole('button', { name: 'Upload ZIP' }).click();
+  await expect(page.locator('p.error')).toHaveText('The file is too large (limit 200MB).');
+  await expect(page.getByRole('button', { name: 'Upload ZIP' })).toBeEnabled();
+});
+
+test('token is shown only once', async ({ page }) => {
   await signUp(page, newEmail(), 'en');
   await page.goto('/en/settings/tokens');
   await page.getByLabel('Token name').fill('laptop');
   await page.getByRole('button', { name: 'Create token' }).click();
   const token = await page.getByTestId('new-token').textContent();
   expect(token!.length).toBeGreaterThan(10);
+  await page.getByRole('button', { name: 'Close' }).click();
+  await expect(page.getByTestId('new-token')).toHaveCount(0);
   await page.reload();
   await expect(page.getByTestId('new-token')).toHaveCount(0);
   await expect(page.getByText(token!)).toHaveCount(0);
   await expect(page.getByRole('rowheader', { name: 'laptop' })).toBeVisible();
+  await page.getByRole('button', { name: 'Revoke: laptop' }).click();
+  await expect(page.getByRole('rowheader', { name: 'laptop' })).toHaveCount(0);
 });
 
-// Blocked until Task 6 (GitHub settings) is merged: PATCH /apps/:id/github does not exist yet.
-test.fixme('saves GitHub settings', async ({ page }) => {
+// GitHub itself cannot be reached in e2e; the real connect/PATCH flow is covered by API tests (apps/api/test/github.test.ts).
+// Here: the form submits and an installation the account has not linked is rejected with 403.
+test('GitHub form submits and asks to connect GitHub first', async ({ page }) => {
   await signUp(page, newEmail(), 'en');
   await createApp(page, appName());
   await page.getByLabel('Repository (owner/repo)').fill('octo/site');
   await page.getByLabel('Branch').fill('main');
-  await page.getByLabel('Installation ID').fill('123');
+  await page.getByLabel('Installation ID').fill('12a3');
+  await expect(page.getByLabel('Installation ID')).toHaveValue('123');
   await page.getByRole('button', { name: 'Save integration' }).click();
-  await expect(page.locator('p.error')).toHaveCount(0);
+  await expect(page.locator('p.error')).toContainText('Connect GitHub first');
 });

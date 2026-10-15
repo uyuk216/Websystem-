@@ -35,6 +35,8 @@ pnpm doctor              # ツールの確認だけ行う
 初回は `.env.development.example` が `.env.development` にコピーされます（コミットしないこと）。
 `apps/api` ができるまで `db:migrate` は自動でスキップされます。
 
+`pnpm dev:up` のあと、`pnpm dev` 1 つで api(:3001)・web(:5173)・worker・static(:8090) がまとめて起動します（`concurrently`、Ctrl+C で全部停止）。個別に動かす場合は `pnpm --filter <api|web|worker|static> dev`。
+
 ## 接続先
 
 | サービス | 接続先 |
@@ -69,10 +71,18 @@ Migrations 0006/0007 enable and FORCE RLS on accounts, owners, sessions, passkey
 
 `apps/static` (port `STATIC_PORT`, default 8090) serves `http://<app>.<BASE_DOMAIN>:8090` (dev: `<app>.localhost:8090`). Uploaded sites run arbitrary JavaScript, so `BASE_DOMAIN` must be a registrable domain separate from the one used by `APP_ORIGIN` / `RP_ID`; in production it should be listed on the Public Suffix List so browsers isolate each site's cookies and storage. Session cookies are host-only (no `Domain` attribute; covered by a test), so they are never sent to `*.BASE_DOMAIN`.
 
+### `.localhost` でサイトを開く
+
+アップロードしたサイトは `http://<アプリ名>.localhost:8090` で開きます。`*.localhost` は常に自分のマシン（127.0.0.1）を指す予約名なので、`/etc/hosts` や DNS の設定は不要です。
+
+- Chrome / Firefox / Edge：そのまま開けます。
+- Safari：サブドメイン付きの `*.localhost` を解決できないことがあります。その場合は Chrome / Firefox を使うか、`/etc/hosts` に `127.0.0.1 <アプリ名>.localhost` を追加してください。
+- https が必要なとき（Service Worker など）：[mkcert](https://github.com/FiloSottile/mkcert) でローカル CA を入れ（`mkcert -install`）、`mkcert "*.localhost" localhost` で証明書を作ってリバースプロキシ（Caddy など）に設定します。dev サーバー自体は http のみです。
+
 ## Housekeeping
 
 `pnpm --filter api admin:purge` deletes expired/revoked sessions (30 days idle, 90 days absolute), old login events and spent WebAuthn challenges.
 
 ## CI
 
-`.github/workflows/ci.yml` を参照。ubuntu は PostgreSQL / Mailpit をサービスコンテナで起動して全テストと E2E を実行します。macOS は Docker が無いため lint・typecheck と shared / i18n のテストのみです。gitleaks（設定は `.gitleaks.toml`）と `pnpm audit --audit-level=high` も実行します。依存更新は Renovate（`renovate.json`）が毎週月曜 6 時前にまとめて PR を作ります。
+`.github/workflows/ci.yml` を参照。ubuntu は PostgreSQL / Mailpit をサービスコンテナ、MinIO を `docker run` で起動し、バケットを作成してから全テスト（api・worker・static・cli を含む）と E2E（worker・static も一緒に起動）を実行します。macOS は Docker が無いため lint・typecheck と shared / i18n のテストのみです。gitleaks（設定は `.gitleaks.toml`）と `pnpm audit --audit-level=high` も実行します。依存更新は Renovate（`renovate.json`）が毎週月曜 6 時前にまとめて PR を作ります。

@@ -46,13 +46,20 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Create .env.development from the example (dev-only values)
         run: cp .env.development.example .env.development
+      - name: Start MinIO (object storage for sources / sites)
+        run: |
+          docker run -d --name minio -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          for i in $(seq 1 30); do curl -sf http://localhost:9000/minio/health/live && break; sleep 1; done
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm --filter api db:migrate
+      - run: pnpm --filter worker ensure-buckets
+      # api, worker, static and cli tests all run here (they need PostgreSQL and MinIO).
       - run: pnpm test
       - name: Install Playwright Chromium
         run: pnpm --filter web exec playwright install --with-deps chromium
-      - name: E2E
+      - name: E2E (Playwright starts api, web, worker and static)
         run: |
           export CHROMIUM_PATH="$(cd apps/web && node -e "console.log(require('@playwright/test').chromium.executablePath())")"
           pnpm --filter web e2e

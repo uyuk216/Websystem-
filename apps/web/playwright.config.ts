@@ -18,6 +18,13 @@ export default defineConfig({
       url: 'http://localhost:3001/healthz',
       reuseExistingServer: false,
       timeout: 60_000,
+      env: {
+        // Small upload limit so the 413 UI is testable; dummy GitHub App so PATCH /apps/:id/github exists
+        // (GitHub itself is never called: an unlinked installation is rejected with 403 first).
+        UPLOAD_MAX_BYTES: '100000',
+        GITHUB_APP_ID: '1', GITHUB_APP_PRIVATE_KEY: 'dummy', GITHUB_WEBHOOK_SECRET: 'e2e-secret',
+        GITHUB_CLIENT_ID: 'e2e', GITHUB_CLIENT_SECRET: 'e2e',
+      },
     },
     {
       command: 'pnpm --filter web dev',
