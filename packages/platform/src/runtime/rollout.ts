@@ -44,12 +44,33 @@ export async function waitHealthy(driver: RuntimeDriver, appId: string, deployme
   }
 }
 
-/** Last `tail` log lines of a deployment's container with every given secret value replaced. */
+/** Every string a secret may show up as in a log: raw, base64 (std/url-safe) and URL-encoded; per line for multi-line values. */
+export function redactionTerms(secrets: string[]): string[] {
+  const out = new Set<string>();
+  const add = (v: string) => {
+    if (v.trim().length < 4) return;
+    const b = Buffer.from(v, 'utf8');
+    for (const f of [v, v.trim(), encodeURIComponent(v), encodeURIComponent(v).replace(/%20/g, '+'), b.toString('base64'), b.toString('base64').replace(/=+$/, ''), b.toString('base64url')]) {
+      if (f.length >= 4) out.add(f);
+    }
+  };
+  for (const v of secrets) {
+    add(v);
+    if (/[\r\n]/.test(v)) for (const line of v.split(/\r?\n/)) add(line);
+  }
+  return [...out].sort((x, y) => y.length - x.length);
+}
+
+export function redact(line: string, terms: string[]): string {
+  return terms.reduce((acc, t) => acc.split(t).join('***'), line);
+}
+
+/** Last `tail` log lines of a deployment's container, secrets redacted before each line is cut to 2000 chars. */
 export async function collectLogs(driver: RuntimeDriver, appId: string, deploymentId: string, secrets: string[], tail = LOG_TAIL_LINES): Promise<string[]> {
   let lines: string[];
   try { lines = await driver.logs(appId, tail, deploymentId); } catch { return []; }
-  const hide = secrets.filter((s) => s.length >= 4);
-  return lines.slice(-tail).map((l) => hide.reduce((acc, s) => acc.split(s).join('***'), l.slice(0, 2000)));
+  const terms = redactionTerms(secrets);
+  return lines.slice(-tail).map((l) => redact(l, terms).slice(0, 2000));
 }
 
 /** Removes every image built for an app (`ys/<appId>:*`). */

@@ -14,5 +14,5 @@ const ALLOWED: Record<TeamRole, readonly TeamAction[]> = {
  * only member<->admin, and nobody acts on the owner) are enforced where the target is known.
  */
 export function can(role: TeamRole, action: TeamAction): boolean {
-  return ALLOWED[role].includes(action);
+  return ALLOWED[role]?.includes(action) ?? false;
 }

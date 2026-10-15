@@ -334,7 +334,7 @@ export function createApp(deps?: AppDeps): Hono {
       });
       app.post('/apps/:id/deployments/:did/rollback', session, async (c) => {
         const r = await rollback(deps.db, c.get('accountId'), c.req.param('id'), c.req.param('did'), deps.runtime);
-        return 'error' in r ? c.json({ error: r.error }, depStatus[r.error]) : c.json(r);
+        return 'error' in r ? c.json(r, depStatus[r.error]) : c.json(r);
       });
     }
     const appEnvKey = deps.config.appEnvKey;

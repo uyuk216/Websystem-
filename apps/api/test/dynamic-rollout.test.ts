@@ -6,10 +6,10 @@ import { eq } from 'drizzle-orm';
 import { DockerDriver, createStorage, loadStorageConfig, type Storage } from 'platform';
 import { makeZip } from '../../../packages/platform/test/ingest/helpers.js';
 import { withTestDb, type TestDb } from './helpers/db.js';
-import { accounts, apps, deployments } from '../src/db/schema.js';
+import { accounts, apps, deployments, owners, teamMembers, teams } from '../src/db/schema.js';
 import { ensureAccountOwner } from '../src/teams/teams.js';
 import { createApp } from '../src/apps/apps.js';
-import { createDeployment, rollback } from '../src/apps/deployments.js';
+import { createDeployment, listDeployments, rollback } from '../src/apps/deployments.js';
 import { setEnvVar } from '../src/apps/env-vars.js';
 import { deleteAppStorage, processDeployment } from '../src/ingest/publish.js';
 import { createDynamicRuntime, type DynamicRuntime } from '../src/ingest/dynamic.js';
@@ -31,7 +31,7 @@ let n = 0;
 const queue = { send: async () => 'job' };
 const zip = (files: Record<string, string>) => Readable.from([makeZip(Object.entries(files).map(([name, d]) => ({ name, data: Buffer.from(d) })))]);
 const cleanup: string[] = [];
-afterAll(async () => { for (const id of cleanup) await deleteAppStorage(storage, id, rt).catch(() => undefined); });
+afterAll(async () => { await Promise.all(cleanup.map((id) => deleteAppStorage(storage, id, rt).catch(() => undefined))); }, 120_000);
 
 /** An alpine app serving `<label> $GREETING` on $PORT after `delay` seconds. */
 const app = (label: string, o: { delay?: number; port?: string; cmd?: string } = {}) => ({
@@ -160,4 +160,20 @@ describe('runtime configuration', () => {
     expect(await setEnvVar(db, randomBytes(32), s.accountId, s.appId, 'B', 'two')).toEqual({ ok: true }); // other key
     expect(await setEnvVar(db, envKey, s.accountId, s.appId, 'C', 'three')).toEqual({ ok: true });
   }));
+});
+
+describe('runtime log exposure', () => {
+  it('returns runtime logs only to users who may deploy', () => withTestDb(async (db) => {
+    const s = await setup(db);
+    const [t] = await db.insert(teams).values({ name: `t${n++}` }).returning();
+    const [o] = await db.insert(owners).values({ kind: 'team', teamId: t!.id }).returning();
+    const [viewer] = await db.insert(accounts).values({ emailHash: `vw${n++}`, emailEnc: 'e', displayName: 'V', locale: 'ja', adultFrom: '2030-01' }).returning();
+    await db.insert(teamMembers).values([{ teamId: t!.id, accountId: s.accountId, role: 'owner' }, { teamId: t!.id, accountId: viewer!.id, role: 'viewer' }]);
+    await db.update(apps).set({ ownerId: o!.id }).where(eq(apps.id, s.appId));
+    const bad = await deploy(db, s, app('x', { cmd: 'echo visible-log; exit 1' }));
+    const mine = (await listDeployments(db, s.accountId, s.appId)).find((d) => d.id === bad.id)!;
+    expect((mine.findings as { logs: string[] }).logs.join()).toContain('visible-log');
+    const theirs = (await listDeployments(db, viewer!.id, s.appId)).find((d) => d.id === bad.id);
+    expect(theirs).toMatchObject({ status: 'failed', findings: null });
+  }), 240_000);
 });

@@ -9,7 +9,7 @@ import type { MessageKey } from 'i18n';
 interface AppInfo { id: string; name: string; publishDir: string; activeDeploymentId: string | null; githubRepo: string | null; githubBranch: string | null }
 interface Finding { path: string; line: number; rule: string }
 interface Dep {
-  id: string; status: string; source: string; message: string | null; findings: Finding[] | null;
+  id: string; status: string; source: string; message: string | null; findings: Finding[] | { kind: 'runtime'; logs: string[] } | null;
   fileCount: number | null; createdAt: string;
 }
 interface Usage { month: string; bytes: number; limitBytes: number }
@@ -139,11 +139,14 @@ export default function AppPage() {
                     {d.status === 'blocked_secret' && (
                       <div role="note">
                         <p>{t('deploy.blockedHelp')}</p>
-                        <ul>{(d.findings ?? []).map((f, i) => <li key={i}><code>{f.path}:{f.line}</code> ({f.rule})</li>)}</ul>
+                        <ul>{(Array.isArray(d.findings) ? d.findings : []).map((f, i) => <li key={i}><code>{f.path}:{f.line}</code> ({f.rule})</li>)}</ul>
                       </div>
                     )}
                     {d.status === 'held_for_review' && <p role="note">{t('deploy.heldHelp')}</p>}
-                    {d.status === 'failed' && d.message && <p className="muted">{d.message}</p>}
+                    {d.status === 'failed' && d.message && <p className="muted">{d.message.startsWith('deploy.') ? t(d.message as MessageKey) : d.message}</p>}
+                    {d.status === 'failed' && d.findings && !Array.isArray(d.findings) && d.findings.logs.length > 0 && (
+                      <pre data-testid="runtime-log">{d.findings.logs.join('\n')}</pre>
+                    )}
                   </td>
                   <td>{d.status === 'superseded' && <button type="button" onClick={() => void rollback(d.id)}>{t('deploy.rollback')}</button>}</td>
                 </tr>

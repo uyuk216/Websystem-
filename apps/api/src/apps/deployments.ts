@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Transform, type Readable } from 'node:stream';
 import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { BUCKETS, JOBS, appPrefix, collectLogs, waitHealthy, type ArchiveFormat, type Storage } from 'platform';
-import { STATIC_LIMITS } from 'shared';
+import { DYNAMIC_LIMITS, STATIC_LIMITS } from 'shared';
 import { UUID } from '../auth/cross-device.js';
 import { withAccount, withSystem, type Db, type Tx } from '../db/client.js';
 import { apps, deployments } from '../db/schema.js';
@@ -151,11 +151,17 @@ export async function createSystemDeployment(
 
 export async function listDeployments(db: Db, accountId: string, appId: string) {
   if (!UUID.test(appId)) return [];
-  return withAccount(db, accountId, (tx) => tx.select({
+  return withAccount(db, accountId, async (tx) => {
+    const [a] = await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId));
+    const manage = !!a && await mayManage(tx, accountId, a.ownerId);
+    const rows = await tx.select({
     id: deployments.id, status: deployments.status, source: deployments.source, message: deployments.message,
     findings: deployments.findings, totalBytes: deployments.totalBytes, fileCount: deployments.fileCount,
     commitSha: deployments.commitSha, createdAt: deployments.createdAt, finishedAt: deployments.finishedAt,
-  }).from(deployments).where(eq(deployments.appId, appId)).orderBy(desc(deployments.createdAt), desc(deployments.id)));
+    }).from(deployments).where(eq(deployments.appId, appId)).orderBy(desc(deployments.createdAt), desc(deployments.id));
+    // Runtime logs may contain app output: only people who can deploy see them (secret-scan findings stay visible).
+    return rows.map((r) => (!manage && r.findings && !Array.isArray(r.findings) ? { ...r, findings: null } : r));
+  });
 }
 
 /**
@@ -165,7 +171,7 @@ export async function listDeployments(db: Db, accountId: string, appId: string) 
  */
 export async function rollback(
   db: Db, accountId: string, appId: string, deploymentId: string, rt?: DynamicRuntime,
-): Promise<{ ok: true } | { error: RollbackError }> {
+): Promise<{ ok: true } | { error: RollbackError; reason?: string; logs?: string[] }> {
   if (!UUID.test(appId) || !UUID.test(deploymentId)) return { error: 'not_found' };
   const pre = await withAccount(db, accountId, async (tx) => {
     const [a] = await tx.select({ ownerId: apps.ownerId, kind: apps.kind }).from(apps).where(eq(apps.id, appId));
@@ -186,14 +192,14 @@ export async function rollback(
       const env = await getAppEnvForRun(db, rt.envKey, appId);
       await rt.driver.start({
         appId, deploymentId, ownerId: pre.ownerId, image: pre.imageRef, env: { ...env, PORT: String(CONTAINER_PORT) },
-        limits: { memoryMb: 512, cpu: 0.5, pids: 256 }, port: CONTAINER_PORT,
+        limits: { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids }, port: CONTAINER_PORT,
       });
       started = true;
       const health = await waitHealthy(rt.driver, appId, deploymentId, rt.health);
       if (!health.ok) {
-        console.error('rollback target failed its health check', appId, deploymentId, await collectLogs(rt.driver, appId, deploymentId, Object.values(env)));
+        const logs = await collectLogs(rt.driver, appId, deploymentId, Object.values(env));
         if (!pre.wasLive) await rt.driver.stopDeployment(appId, deploymentId);
-        return { error: 'start_failed' };
+        return { error: 'start_failed', reason: health.reason === 'exited' ? 'deploy.error.app_exited' : 'deploy.error.health_check_failed', logs };
       }
     } catch (e) {
       if (started && !pre.wasLive) await rt.driver.stopDeployment(appId, deploymentId).catch(() => undefined);
