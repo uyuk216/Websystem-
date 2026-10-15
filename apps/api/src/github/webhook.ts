@@ -1,9 +1,9 @@
 import type { Readable } from 'node:stream';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { verify } from '@octokit/webhooks-methods';
 import type { Storage } from 'platform';
 import { withSystem, type Db } from '../db/client.js';
-import { apps } from '../db/schema.js';
+import { apps, deployments, githubDeliveries } from '../db/schema.js';
 import { createSystemDeployment, type JobQueue } from '../apps/deployments.js';
 import type { GithubClient } from './client.js';
 
@@ -57,11 +57,25 @@ export async function deployPush(
 ): Promise<void> {
   for (const appId of appIds) {
     try {
-      const archive: Readable = await client.downloadTarball(e.installationId, e.repo, e.after);
-      const r = await createSystemDeployment(db, storage, queue, appId, { source: 'github', archive, format: 'tar.gz', commitSha: e.after });
+      // A commit that is already queued, being processed or live is not deployed again.
+      const dup = await withSystem(db, (tx) => tx.select({ id: deployments.id }).from(deployments).where(and(
+        eq(deployments.appId, appId), eq(deployments.commitSha, e.after), inArray(deployments.status, ['queued', 'processing', 'live']),
+      )).limit(1));
+      if (dup.length > 0) continue;
+      const r = await createSystemDeployment(db, storage, queue, appId, {
+        source: 'github', format: 'tar.gz', commitSha: e.after,
+        fetchArchive: (): Promise<Readable> => client.downloadTarball(e.installationId, e.repo, e.after),
+      });
       if ('error' in r) console.error('github deploy rejected', appId, r.error);
     } catch (err) {
       console.error('github deploy failed', appId, err);
     }
   }
+}
+
+/** Records a webhook delivery id. False when it was already seen (a replay or redelivery). */
+export async function claimDelivery(db: Db, deliveryId: string): Promise<boolean> {
+  const rows = await withSystem(db, (tx) => tx.insert(githubDeliveries).values({ deliveryId })
+    .onConflictDoNothing().returning({ id: githubDeliveries.deliveryId }));
+  return rows.length > 0;
 }

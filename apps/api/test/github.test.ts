@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { createStorage, JOBS, loadStorageConfig, type Storage } from 'platform';
 import { makeTarGz } from '../../../packages/platform/test/ingest/helpers.js';
 import { withTestDb, type TestDb } from './helpers/db.js';
-import { accounts, apps, deployments } from '../src/db/schema.js';
+import { accounts, apps, deployments, githubDeliveries, githubInstallationLinks, githubOauthStates } from '../src/db/schema.js';
 import { ensureAccountOwner } from '../src/teams/teams.js';
 import { createApp } from '../src/apps/apps.js';
 import { deleteAppStorage, processDeployment } from '../src/ingest/publish.js';
@@ -16,6 +16,7 @@ import { createSession } from '../src/auth/sessions.js';
 import { verifyWebhook } from '../src/github/webhook.js';
 import type { GithubClient } from '../src/github/client.js';
 import { loadConfig } from '../src/config.js';
+import { completeConnect, purgeGithubState, startConnect, validRepo } from '../src/github/link.js';
 
 const env = {
   S3_ENDPOINT: process.env.S3_ENDPOINT ?? 'http://localhost:9000',
@@ -38,12 +39,14 @@ async function setup(db: TestDb) {
   return { accountId: a!.id, appId };
 }
 
-function harness(db: TestDb, overrides: Partial<GithubClient> = {}) {
+function harness(db: TestDb, overrides: Partial<GithubClient> = {}, userInstalls: string[] = ['42']) {
   const jobs: { name: string; data: unknown }[] = [];
   const queue = { send: async (name: string, data: object) => { jobs.push({ name, data }); return 'j'; } };
   const downloads: { installationId: string; repo: string; sha: string }[] = [];
   const client: GithubClient = {
     verifyInstallation: async () => true,
+    authorizeUrl: (state) => `https://gh.example/authorize?state=${state}`,
+    userInstallations: async () => userInstalls,
     downloadTarball: async (installationId, repo, sha) => {
       downloads.push({ installationId, repo, sha });
       return Readable.from([makeTarGz([
@@ -146,7 +149,9 @@ describe('github', () => {
     });
     expect((await h.push(payload())).status).toBe(202);
     await Promise.all(h.pending);
-    expect(await db.select().from(deployments)).toHaveLength(1);
+    const rows = await db.select().from(deployments);
+    expect(rows.map((r) => r.status).sort()).toEqual(['failed', 'queued']);
+    expect(rows.find((r) => r.status === 'failed')).toMatchObject({ message: 'deploy.error.download_failed', commitSha: SHA, source: 'github' });
     await deleteAppStorage(storage, a.appId);
     await deleteAppStorage(storage, b.appId);
   }));
@@ -157,6 +162,7 @@ describe('github', () => {
     const ck = `sid=${(await createSession(db, accountId, 'x')).token}`;
     const ok = `sid=${(await createSession(db, o!.id, 'x')).token}`;
     let valid = true;
+    await db.insert(githubInstallationLinks).values({ accountId, installationId: '42' });
     const h = harness(db, { verifyInstallation: async () => valid });
     const patch = (cookie: string | null, body: unknown) => h.app.request(`/apps/${appId}/github`, {
       method: 'PATCH', headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body),
@@ -166,6 +172,11 @@ describe('github', () => {
     expect((await patch(ok, good)).status).toBe(404);
     expect((await patch(ck, { ...good, repo: 'nope' })).status).toBe(400);
     expect((await patch(ck, { ...good, installationId: 'x' })).status).toBe(400);
+    expect((await patch(ck, { ...good, repo: 'octo/..' })).status).toBe(400);
+    expect((await patch(ck, { ...good, repo: 'octo/site.git' })).status).toBe(400);
+    expect((await patch(ck, { ...good, installationId: '12345678901234567' })).status).toBe(400);
+    // someone else's installation (no link for this account) is forbidden, even though GitHub knows it
+    expect((await patch(ck, { ...good, installationId: '99' })).status).toBe(403);
     valid = false;
     expect((await patch(ck, good)).status).toBe(400);
     valid = true;
@@ -179,6 +190,87 @@ describe('github', () => {
     const base = { DATABASE_URL: 'x', EMAIL_ENC_KEY: Buffer.alloc(32).toString('base64'), EMAIL_HASH_KEY: Buffer.alloc(32).toString('base64'), APP_ORIGIN: 'x', SMTP_URL: 'x', ADMIN_EMAIL: 'x', RP_ID: 'x' };
     expect(loadConfig(base).github).toBeUndefined();
     expect(loadConfig({ ...base, GITHUB_APP_ID: '1' }).github).toBeUndefined();
-    expect(loadConfig({ ...base, GITHUB_APP_ID: '1', GITHUB_APP_PRIVATE_KEY: 'a\\nb', GITHUB_WEBHOOK_SECRET: 's' }).github).toEqual({ appId: '1', privateKey: 'a\nb', webhookSecret: 's' });
+    expect(loadConfig({ ...base, GITHUB_APP_ID: '1', GITHUB_APP_PRIVATE_KEY: 'a\\nb', GITHUB_WEBHOOK_SECRET: 's' }).github).toBeUndefined();
+    expect(loadConfig({ ...base, GITHUB_APP_ID: '1', GITHUB_APP_PRIVATE_KEY: 'a\\nb', GITHUB_WEBHOOK_SECRET: 's', GITHUB_CLIENT_ID: 'ci', GITHUB_CLIENT_SECRET: 'cs' }).github)
+      .toEqual({ appId: '1', privateKey: 'a\nb', webhookSecret: 's', clientId: 'ci', clientSecret: 'cs' });
   }));
+
+  it('OAuth connect: state is session-bound, single-use, expiring; links come from GitHub; other installs stay forbidden', () => withTestDb(async (db) => {
+    const { accountId, appId } = await setup(db);
+    const [o] = await db.insert(accounts).values({ emailHash: `g${n++}`, emailEnc: 'e', displayName: 'B', locale: 'ja', adultFrom: '2030-01' }).returning();
+    const s1 = await createSession(db, accountId, 'x');
+    const s2 = await createSession(db, accountId, 'y');
+    const ck = `sid=${s1.token}`;
+    const h = harness(db, {}, ['42', '43']);
+    const res = await h.app.request('/github/connect', { headers: { cookie: ck }, redirect: 'manual' });
+    expect(res.status).toBe(302);
+    const state = new URL(res.headers.get('location')!).searchParams.get('state')!;
+    expect(res.headers.get('location')).toContain('https://gh.example/authorize');
+    expect(await db.select().from(githubOauthStates)).toMatchObject([{ accountId, sessionId: s1.sessionId }]);
+    expect((await db.select().from(githubOauthStates))[0]!.stateHash).not.toBe(state);
+    expect((await h.app.request('/github/connect', { redirect: 'manual' })).status).toBe(401);
+    // another session, another account, or a wrong state cannot complete it
+    expect((await h.app.request(`/github/callback?code=c&state=${state}`, { headers: { cookie: `sid=${s2.token}` }, redirect: 'manual' })).headers.get('location')).toContain('github=error');
+    const sB = await createSession(db, o!.id, 'z');
+    expect((await h.app.request(`/github/callback?code=c&state=${state}`, { headers: { cookie: `sid=${sB.token}` }, redirect: 'manual' })).headers.get('location')).toContain('github=error');
+    expect((await h.app.request('/github/callback?code=c&state=nope', { headers: { cookie: ck }, redirect: 'manual' })).headers.get('location')).toContain('github=error');
+    expect(await db.select().from(githubInstallationLinks)).toEqual([]);
+    const ok = await h.app.request(`/github/callback?code=c&state=${state}`, { headers: { cookie: ck }, redirect: 'manual' });
+    expect(ok.headers.get('location')).toBe('https://app.example.com/apps?github=connected');
+    expect((await db.select().from(githubInstallationLinks)).map((l) => l.installationId).sort()).toEqual(['42', '43']);
+    // single use
+    expect((await h.app.request(`/github/callback?code=c&state=${state}`, { headers: { cookie: ck }, redirect: 'manual' })).headers.get('location')).toContain('github=error');
+    // linked account may connect; the other account (no link) may not
+    const patch = (cookie: string, appIdX: string, installationId: string) => h.app.request(`/apps/${appIdX}/github`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ repo: 'octo/site', branch: 'main', installationId }),
+    });
+    expect((await patch(ck, appId, '43')).status).toBe(200);
+    const other = await setup(db);
+    const oc = `sid=${(await createSession(db, other.accountId, 'q')).token}`;
+    expect((await patch(oc, other.appId, '43')).status).toBe(403);
+    // expiry
+    const old = await startConnect(db, accountId, s1.sessionId, new Date(Date.now() - 11 * 60_000));
+    expect(await completeConnect(db, accountId, s1.sessionId, old, 'c', h.client)).toEqual({ error: 'invalid' });
+    expect(await purgeGithubState(db, new Date())).toBe(1);
+  }));
+
+  it('webhook: oversized body is 413 before reading', () => withTestDb(async (db) => {
+    const h = harness(db);
+    const res = await h.app.request('/github/webhook', { method: 'POST', headers: { 'content-length': String(26 * 1024 * 1024), 'x-github-event': 'push' }, body: 'x' });
+    expect(res.status).toBe(413);
+  }));
+
+  it('download error and oversized tarball mark the queued deployment failed with i18n keys', () => withTestDb(async (db) => {
+    const { appId } = await setup(db);
+    await connect(db, appId);
+    const h = harness(db, { downloadTarball: async () => { throw new Error('boom'); } });
+    expect((await h.push(payload())).status).toBe(202);
+    await Promise.all(h.pending);
+    const [d] = await db.select().from(deployments).where(eq(deployments.appId, appId));
+    expect(d).toMatchObject({ status: 'failed', source: 'github', commitSha: SHA, message: 'deploy.error.download_failed' });
+    expect(h.jobs).toEqual([]);
+    expect(await storage.sources.get(d!.sourceKey)).toBeNull();
+  }));
+
+  it('replay protection: same delivery id is ignored; same commit already queued/live is skipped; purge after 7 days', () => withTestDb(async (db) => {
+    const { appId } = await setup(db);
+    await connect(db, appId);
+    const h = harness(db);
+    expect((await h.push(payload(), { 'x-github-delivery': 'd1' })).status).toBe(202);
+    await Promise.all(h.pending);
+    expect((await h.push(payload(), { 'x-github-delivery': 'd1' })).status).toBe(200);
+    // new delivery, same commit, first still queued -> no second deployment
+    expect((await h.push(payload(), { 'x-github-delivery': 'd2' })).status).toBe(202);
+    await Promise.all(h.pending);
+    expect(await db.select().from(deployments)).toHaveLength(1);
+    expect(h.downloads).toHaveLength(1);
+    await db.update(githubDeliveries).set({ receivedAt: new Date(Date.now() - 8 * 86400_000) }).where(eq(githubDeliveries.deliveryId, 'd1'));
+    expect(await purgeGithubState(db, new Date())).toBe(1);
+    await deleteAppStorage(storage, appId);
+  }));
+
+  it('validRepo rejects dot segments and .git suffix', () => {
+    expect(validRepo('octo/site')).toBe(true);
+    for (const r of ['./x', '../x', 'a/..', 'a/.', 'a/b.git', 'a/b.GIT', 'a', 'a/b/c']) expect(validRepo(r)).toBe(false);
+  });
 });

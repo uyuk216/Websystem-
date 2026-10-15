@@ -141,6 +141,7 @@ export const ja = {
   'deploy.error.symlink': 'シンボリックリンクを含むため受け付けられません。',
   'deploy.error.corrupt': 'アーカイブを読み込めませんでした。',
   'deploy.error.empty': '公開するファイルがありません。公開フォルダの設定を確認してください。',
+  'deploy.error.download_failed': 'GitHub からソースを取得できませんでした。もう一度 push してください。',
   'deploy.error.internal': '処理中にエラーが発生しました。もう一度お試しください。',
   'deploy.error.source_missing': 'アップロードしたファイルが見つかりません。',
   'deploy.blockedSecret': '秘密情報らしい文字列が見つかったため公開しませんでした。',

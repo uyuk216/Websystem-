@@ -90,15 +90,49 @@ export async function createDeployment(
 }
 
 /**
- * Same as createDeployment for system callers (GitHub webhook): the caller has already authorised the app
- * (matched installation + repo + branch), so no account is involved and `created_by` stays null.
+ * Deployment for system callers (GitHub webhook; no account, `created_by` null). The `queued` row is created
+ * first so a failing download is visible to the owner: it is then marked `failed` with an i18n message key.
+ * The job is enqueued only after the archive is stored.
  */
 export async function createSystemDeployment(
   db: Db, storage: Storage, queue: JobQueue, appId: string,
-  input: { source: DeploySource; archive: Readable; format: ArchiveFormat; commitSha?: string },
-): Promise<{ deploymentId: string } | { error: CreateDeploymentError }> {
+  input: { source: DeploySource; format: ArchiveFormat; commitSha: string; fetchArchive: () => Promise<Readable> },
+): Promise<{ deploymentId: string } | { error: 'not_found' | 'failed' }> {
   if (!UUID.test(appId)) return { error: 'not_found' };
-  return storeAndQueue(db, storage, queue, appId, input, null, (fn) => withSystem(db, fn), async () => true);
+  const deploymentId = randomUUID();
+  const sourceKey = `${appPrefix(BUCKETS.sources, appId)}${deploymentId}.${input.format}`;
+  const inserted = await withSystem(db, async (tx) => {
+    const [a] = await tx.select({ id: apps.id }).from(apps).where(eq(apps.id, appId)).for('share');
+    if (!a) return false;
+    await tx.insert(deployments).values({ id: deploymentId, appId, source: input.source, sourceKey, createdBy: null, commitSha: input.commitSha });
+    return true;
+  });
+  if (!inserted) return { error: 'not_found' };
+  const fail = async (message: string) => {
+    await storage.sources.delete(sourceKey).catch(() => undefined);
+    await withSystem(db, async (tx) => {
+      await tx.update(deployments).set({ status: 'failed', message, finishedAt: new Date() }).where(eq(deployments.id, deploymentId));
+    });
+  };
+  let archive: Readable | undefined;
+  try {
+    archive = await input.fetchArchive();
+    const capped = capBytes(STATIC_LIMITS.storageBytes);
+    archive.on('error', (e) => capped.destroy(e));
+    archive.pipe(capped);
+    await storage.sources.put(sourceKey, capped, 'application/octet-stream');
+  } catch (e) {
+    archive?.destroy();
+    await fail(e instanceof TooLarge ? 'deploy.error.too_large' : 'deploy.error.download_failed');
+    return { error: 'failed' };
+  }
+  try {
+    await queue.send(JOBS.processDeployment, { deploymentId });
+  } catch (e) {
+    await fail('deploy.error.internal');
+    throw e;
+  }
+  return { deploymentId };
 }
 
 export async function listDeployments(db: Db, accountId: string, appId: string) {

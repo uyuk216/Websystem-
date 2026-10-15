@@ -181,3 +181,24 @@ export const transferUsage = pgTable('transfer_usage', {
   primaryKey({ columns: [t.appId, t.month] }),
   check('transfer_usage_month_format_check', sql`${t.month} ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'`),
 ]);
+
+/** Installations an account proved access to through GitHub user authorization (OAuth). */
+export const githubInstallationLinks = pgTable('github_installation_links', {
+  accountId: uuid('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  installationId: text('installation_id').notNull(),
+  createdAt: createdAt(),
+}, (t) => [primaryKey({ columns: [t.accountId, t.installationId] })]);
+
+/** Pending OAuth authorizations: hash of the state nonce, bound to the starting session. Owner role only. */
+export const githubOauthStates = pgTable('github_oauth_states', {
+  stateHash: text('state_hash').primaryKey(),
+  accountId: uuid('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  sessionId: uuid('session_id').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+}, (t) => [index('github_oauth_states_expires_idx').on(t.expiresAt)]);
+
+/** Webhook delivery ids already handled (replay protection). Owner role only. */
+export const githubDeliveries = pgTable('github_deliveries', {
+  deliveryId: text('delivery_id').primaryKey(),
+  receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+});

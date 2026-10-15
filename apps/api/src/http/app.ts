@@ -17,7 +17,8 @@ import { JOBS, type Storage } from 'platform';
 import { STATIC_LIMITS } from 'shared';
 import { createDeployment, listDeployments, rollback, type JobQueue } from '../apps/deployments.js';
 import { createApp as createAppRecord, deleteApp, getApp, listApps, updateApp } from '../apps/apps.js';
-import { deployPush, findPushTargets, parsePush, verifyWebhook } from '../github/webhook.js';
+import { claimDelivery, deployPush, findPushTargets, parsePush, verifyWebhook } from '../github/webhook.js';
+import { completeConnect, setGithub, startConnect } from '../github/link.js';
 import type { GithubClient } from '../github/client.js';
 import { getUsage } from '../usage/transfer.js';
 import { createSession, listSessions, revokeSession } from '../auth/sessions.js';
@@ -330,11 +331,13 @@ export function createApp(deps?: AppDeps): Hono {
       const { storage, queue } = deps;
       const { client, webhookSecret } = deps.github;
       const background = deps.github.background ?? ((p: Promise<unknown>) => { p.catch((err: unknown) => console.error('github webhook work failed', err)); });
-      app.post('/github/webhook', async (c) => {
+      app.post('/github/webhook', bodyLimit({ maxSize: 25 * 1024 * 1024, onError: (c) => c.json({ error: 'too_large' }, 413) }), async (c) => {
         // The signature covers the exact raw body, so read it as text before any parsing.
         const raw = await c.req.text();
         if (!(await verifyWebhook(webhookSecret, raw, c.req.header('x-hub-signature-256')))) return c.json({ error: 'invalid_signature' }, 401);
         if (c.req.header('x-github-event') !== 'push') return c.json({ ok: true, ignored: true });
+        const delivery = c.req.header('x-github-delivery');
+        if (delivery && (delivery.length > 100 || !(await claimDelivery(deps.db, delivery)))) return c.json({ ok: true, ignored: true });
         let json: unknown;
         try { json = JSON.parse(raw); } catch { return c.json({ error: 'invalid' }, 400); }
         const e = parsePush(json);
@@ -345,10 +348,26 @@ export function createApp(deps?: AppDeps): Hono {
         background(deployPush(deps.db, storage, queue, client, e, targets));
         return c.json({ ok: true, apps: targets.length }, 202);
       });
+      // User authorization: proves which installations the signed-in account controls.
+      app.get('/github/connect', session, async (c) => {
+        const state = await startConnect(deps.db, c.get('accountId'), c.get('sessionId'));
+        return c.redirect(client.authorizeUrl(state));
+      });
+      app.get('/github/callback', session, attemptLimit, async (c) => {
+        const code = c.req.query('code');
+        const state = c.req.query('state');
+        const back = (ok: boolean) => c.redirect(`${deps.config.appOrigin}/apps?github=${ok ? 'connected' : 'error'}`);
+        if (!str(code, 200) || !str(state, 200)) return back(false);
+        const r = await completeConnect(deps.db, c.get('accountId'), c.get('sessionId'), state, code, client).catch((err: unknown) => {
+          console.error('github connect failed', err);
+          return { error: 'failed' as const };
+        });
+        return back(!('error' in r));
+      });
       app.patch('/apps/:id/github', session, async (c) => {
         const b = await jsonBody(c);
         const installationId = typeof b?.installationId === 'number' ? String(b.installationId) : b?.installationId;
-        if (!str(b?.repo, 201) || !str(b.branch, 255) || !str(installationId, 20)) return c.json({ error: 'invalid' }, 400);
+        if (!str(b?.repo, 201) || !str(b.branch, 255) || !str(installationId, 16)) return c.json({ error: 'invalid' }, 400);
         const r = await setGithub(deps.db, c.get('accountId'), c.req.param('id'), { repo: b.repo, branch: b.branch, installationId }, (i, repo) => client.verifyInstallation(i, repo));
         return 'error' in r ? c.json({ error: r.error }, appStatus[r.error]) : c.json(r);
       });

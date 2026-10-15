@@ -143,6 +143,7 @@ export const en = {
   'deploy.error.symlink': 'The archive contains a symbolic link and was rejected.',
   'deploy.error.corrupt': 'The archive could not be read.',
   'deploy.error.empty': 'There are no files to publish. Check the publish folder setting.',
+  'deploy.error.download_failed': 'The source could not be downloaded from GitHub. Push again to retry.',
   'deploy.error.internal': 'An error occurred while processing. Please try again.',
   'deploy.error.source_missing': 'The uploaded file could not be found.',
   'deploy.blockedSecret': 'Text that looks like a secret was found, so the site was not published.',
