@@ -38,6 +38,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <header className="shell">
         <strong>{t('app.name')}</strong>
         <nav aria-label="main">
+          <Link href={`/${locale}/apps`}>{t('nav.apps')}</Link>
+          <Link href={`/${locale}/settings/tokens`}>{t('nav.tokens')}</Link>
           <Link href={`/${locale}/settings/devices`}>{t('nav.devices')}</Link>
           <Link href={`/${locale}/settings/logins`}>{t('nav.logins')}</Link>
           <Link href={`/${locale}/settings/passkeys`}>{t('nav.passkeys')}</Link>

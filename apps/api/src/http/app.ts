@@ -17,7 +17,7 @@ import { JOBS, type Storage } from 'platform';
 import { STATIC_LIMITS } from 'shared';
 import { createDeployment, listDeployments, rollback, type JobQueue } from '../apps/deployments.js';
 import { getUsage } from '../usage/transfer.js';
-import { createApp as createAppRecord, deleteApp, getApp, listApps, updateApp } from '../apps/apps.js';
+import { createApp as createAppRecord, deleteApp, getApp, listApps, listOwners, updateApp } from '../apps/apps.js';
 import { createSession, listSessions, revokeSession } from '../auth/sessions.js';
 import { randomBytes } from 'node:crypto';
 import { getCookie, setCookie } from 'hono/cookie';
@@ -249,6 +249,7 @@ export function createApp(deps?: AppDeps): Hono {
       return 'error' in r ? teamErr(c, r.error) : c.json(r);
     });
     const appStatus = { format: 400, reserved: 400, taken: 409, forbidden: 403, limit: 409, not_found: 404, invalid: 400 } as const;
+    app.get('/me/owners', session, async (c) => c.json({ owners: await listOwners(deps.db, c.get('accountId')) }));
     app.get('/apps', session, async (c) => c.json({ apps: await listApps(deps.db, c.get('accountId')) }));
     app.post('/apps', session, async (c) => {
       const b = await jsonBody(c);
