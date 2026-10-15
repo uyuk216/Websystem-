@@ -15,4 +15,6 @@ export const en = {
   'recovery.approvedBody': 'Your recovery request was approved. All previous sign-ins and passkeys have been revoked. Log in with your email address and set up a passkey again. Your new recovery code will be given to you separately by the administrator.',
   'login.newDeviceSubject': 'Sign-in from a new device',
   'login.newDeviceBody': 'Your account was signed in to from a new device.\nDevice: {device}\nTime: {time}\n\nIf this was not you, review your sessions and passkeys, and use account recovery if needed.',
+  'team.inviteSubject': 'Invitation to join {team}',
+  'team.inviteBody': '{inviter} invited you to join the team "{team}".\nOpen this link to join (valid for 7 days).\n{link}\n\nIf you did not expect this, ignore this email.',
 } satisfies Record<keyof typeof ja, string>;

@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
-  bigint, check, customType, index, integer, pgTable, primaryKey, text, timestamp, uuid,
+  bigint, check, customType, index, integer, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid,
 } from 'drizzle-orm/pg-core';
 
 const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
@@ -103,7 +103,23 @@ export const teamMembers = pgTable('team_members', {
   teamId: uuid('team_id').notNull().references(() => teams.id),
   accountId: uuid('account_id').notNull().references(() => accounts.id),
   role: text('role').notNull(),
-}, (t) => [primaryKey({ columns: [t.teamId, t.accountId] })]);
+}, (t) => [
+  primaryKey({ columns: [t.teamId, t.accountId] }),
+  // Exactly one owner per team, guaranteed by the database.
+  uniqueIndex('team_members_one_owner_idx').on(t.teamId).where(sql`${t.role} = 'owner'`),
+]);
+
+export const teamInvites = pgTable('team_invites', {
+  id: id(),
+  teamId: uuid('team_id').notNull().references(() => teams.id),
+  emailHash: text('email_hash').notNull(),
+  /** SHA-256 hex of the mailed token; the token itself is never stored. */
+  tokenHash: text('token_hash').notNull(),
+  invitedBy: uuid('invited_by').notNull().references(() => accounts.id),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+  createdAt: createdAt(),
+}, (t) => [index('team_invites_team_idx').on(t.teamId)]);
 
 export const owners = pgTable('owners', {
   id: id(),
@@ -111,6 +127,8 @@ export const owners = pgTable('owners', {
   accountId: uuid('account_id').references(() => accounts.id),
   teamId: uuid('team_id').references(() => teams.id),
 }, (t) => [
+  uniqueIndex('owners_account_idx').on(t.accountId),
+  uniqueIndex('owners_team_idx').on(t.teamId),
   check('owners_kind_ref_check', sql`(
     (${t.kind} = 'account' AND ${t.accountId} IS NOT NULL AND ${t.teamId} IS NULL) OR
     (${t.kind} = 'team' AND ${t.teamId} IS NOT NULL AND ${t.accountId} IS NULL)

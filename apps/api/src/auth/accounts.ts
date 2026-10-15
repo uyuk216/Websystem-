@@ -4,6 +4,7 @@ import { checkAge } from 'shared';
 import type { Db } from '../db/client.js';
 import { accounts, emailChallenges } from '../db/schema.js';
 import { encryptEmail, hashEmail, normalizeEmail } from '../crypto/email.js';
+import { ensureAccountOwner } from '../teams/teams.js';
 import { consumeChallenge } from './email-login.js';
 import { generateRecoveryCode, hashRecoveryCode } from './recovery.js';
 
@@ -41,6 +42,7 @@ export async function registerAccount(
       locale: input.locale, adultFrom: age.adultFrom, recoveryCodeHash,
     }).onConflictDoNothing().returning({ id: accounts.id });
     if (!a) return { error: 'exists' as const };
+    await ensureAccountOwner(tx, a.id);
     await tx.update(emailChallenges).set({ accountId: a.id }).where(eq(emailChallenges.id, input.challengeId));
     return { accountId: a.id, recoveryCode };
   });

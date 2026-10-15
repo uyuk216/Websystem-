@@ -8,6 +8,7 @@ import { openEmailLink, getRequesterScreen, getConfirmChoices, confirmNumber, co
 import { registerAccount } from '../auth/accounts.js';
 import { recordLogin, listLoginEvents } from '../auth/login-history.js';
 import { startPasskeyRegistration, finishPasskeyRegistration, startPasskeyLogin, finishPasskeyLogin } from '../auth/passkeys.js';
+import { acceptInvite, changeRole, createTeam, deleteTeam, getTeam, inviteMember, leaveTeam, listTeams, removeMember, transferOwnership } from '../teams/teams.js';
 import { createSession } from '../auth/sessions.js';
 import { randomBytes } from 'node:crypto';
 import { getCookie, setCookie } from 'hono/cookie';
@@ -184,6 +185,56 @@ export function createApp(deps?: AppDeps): Hono {
       setSessionCookie(c, s.token);
       await logLogin(c, r.accountId, 'passkey');
       return c.json({ ok: true });
+    });
+    const teamStatus = { forbidden: 403, full: 409, last_owner: 409, not_member: 404, invalid: 400, expired: 400 } as const;
+    const teamErr = (c: Context, e: keyof typeof teamStatus) => c.json({ error: e }, teamStatus[e]);
+    const inviteLimit = rateLimit(clientIp, 30, 3600);
+    const jsonBody = async (c: Context) => await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    app.get('/teams', session, async (c) => c.json({ teams: await listTeams(deps.db, c.get('accountId')) }));
+    app.post('/teams', session, async (c) => {
+      const b = await jsonBody(c);
+      if (!str(b?.name, 100) || !b.name.trim()) return c.json({ error: 'invalid' }, 400);
+      return c.json(await createTeam(deps.db, c.get('accountId'), b.name.trim()));
+    });
+    app.post('/teams/invites/accept', session, attemptLimit, async (c) => {
+      const b = await jsonBody(c);
+      if (!str(b?.inviteId, 64) || !str(b.token, 200)) return c.json({ error: 'invalid' }, 400);
+      const r = await acceptInvite(deps.db, b.inviteId, b.token, c.get('accountId'));
+      return 'error' in r ? teamErr(c, r.error) : c.json(r);
+    });
+    app.get('/teams/:id', session, async (c) => {
+      const team = await getTeam(deps.db, c.req.param('id'), c.get('accountId'));
+      return team ? c.json(team) : teamErr(c, 'not_member');
+    });
+    app.delete('/teams/:id', session, async (c) => {
+      const r = await deleteTeam(deps.db, c.req.param('id'), c.get('accountId'));
+      return 'error' in r ? teamErr(c, r.error) : c.json(r);
+    });
+    app.post('/teams/:id/invites', session, inviteLimit, async (c) => {
+      const b = await jsonBody(c);
+      if (!str(b?.email, 320)) return c.json({ error: 'invalid' }, 400);
+      const r = await inviteMember(deps.db, deps.mailer, c.req.param('id'), c.get('accountId'), b.email, deps.config);
+      return 'error' in r ? teamErr(c, r.error) : c.json(r);
+    });
+    app.patch('/teams/:id/members/:accountId', session, async (c) => {
+      const b = await jsonBody(c);
+      if (b?.role !== 'admin' && b?.role !== 'member') return c.json({ error: 'invalid' }, 400);
+      const r = await changeRole(deps.db, c.req.param('id'), c.get('accountId'), c.req.param('accountId'), b.role);
+      return 'error' in r ? teamErr(c, r.error) : c.json(r);
+    });
+    app.delete('/teams/:id/members/:accountId', session, async (c) => {
+      const r = await removeMember(deps.db, c.req.param('id'), c.get('accountId'), c.req.param('accountId'));
+      return 'error' in r ? teamErr(c, r.error) : c.json(r);
+    });
+    app.post('/teams/:id/leave', session, async (c) => {
+      const r = await leaveTeam(deps.db, c.req.param('id'), c.get('accountId'));
+      return 'error' in r ? teamErr(c, r.error) : c.json(r);
+    });
+    app.post('/teams/:id/transfer', session, async (c) => {
+      const b = await jsonBody(c);
+      if (!str(b?.toAccountId, 64)) return c.json({ error: 'invalid' }, 400);
+      const r = await transferOwnership(deps.db, c.req.param('id'), c.get('accountId'), b.toAccountId);
+      return 'error' in r ? teamErr(c, r.error) : c.json(r);
     });
     app.get('/me/logins', session, async (c) => c.json({ events: await listLoginEvents(deps.db, c.get('accountId')) }));
   }
