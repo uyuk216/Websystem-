@@ -7,3 +7,7 @@ coverage/
 !.env.development.example
 .superpowers/
 .DS_Store
+.next/
+next-env.d.ts
+test-results/
+playwright-report/
