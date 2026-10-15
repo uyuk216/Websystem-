@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { isIPv4, isIPv6 } from 'node:net';
 import { and, desc, eq, lt, sql } from 'drizzle-orm';
 import { t, type Locale } from 'i18n';
-import type { Db } from '../db/client.js';
+import { withAccount, withSystem, type Db } from '../db/client.js';
 import type { Mailer } from '../mail/mailer.js';
 import { decryptEmail } from '../crypto/email.js';
 import { accounts, loginEvents } from '../db/schema.js';
@@ -59,7 +59,7 @@ const deviceKeyOf = (deviceId: string): string => createHash('sha256').update(de
 export async function recordLogin(db: Db, mailer: Mailer, input: RecordLoginInput, cfg: { emailEncKey: Buffer }): Promise<void> {
   const deviceKey = deviceKeyOf(input.deviceId);
   const now = new Date();
-  const isNew = await db.transaction(async (tx) => {
+  const isNew = await withAccount(db, input.accountId, async (tx) => {
     // Serialize per (account, device) so concurrent first logins send a single mail.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${input.accountId + ':' + deviceKey}, 0))`);
     const [prior] = await tx.select({ id: loginEvents.id }).from(loginEvents)
@@ -81,16 +81,17 @@ export async function recordLogin(db: Db, mailer: Mailer, input: RecordLoginInpu
 }
 
 export async function listLoginEvents(db: Db, accountId: string, limit = 50) {
-  return db
+  return withAccount(db, accountId, (tx) => tx
     .select({ id: loginEvents.id, method: loginEvents.method, deviceLabel: loginEvents.deviceLabel, region: loginEvents.region, ipPrefix: loginEvents.ipPrefix, createdAt: loginEvents.createdAt })
     .from(loginEvents)
     .where(eq(loginEvents.accountId, accountId))
     .orderBy(desc(loginEvents.createdAt))
-    .limit(limit);
+    .limit(limit));
 }
 
 /** Deletes login events older than 30 days. Returns the number of rows removed. */
 export async function purgeOldLoginEvents(db: Db, now: Date): Promise<number> {
-  const rows = await db.delete(loginEvents).where(lt(loginEvents.createdAt, new Date(now.getTime() - LOGIN_EVENT_RETENTION_MS))).returning({ id: loginEvents.id });
+  // Admin purge across all accounts.
+  const rows = await withSystem(db, (tx) => tx.delete(loginEvents).where(lt(loginEvents.createdAt, new Date(now.getTime() - LOGIN_EVENT_RETENTION_MS))).returning({ id: loginEvents.id }));
   return rows.length;
 }

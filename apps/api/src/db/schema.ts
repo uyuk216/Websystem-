@@ -100,7 +100,7 @@ export const teams = pgTable('teams', {
 });
 
 export const teamMembers = pgTable('team_members', {
-  teamId: uuid('team_id').notNull().references(() => teams.id),
+  teamId: uuid('team_id').notNull().references(() => teams.id, { onDelete: 'cascade' }),
   accountId: uuid('account_id').notNull().references(() => accounts.id),
   role: text('role').notNull(),
 }, (t) => [
@@ -111,7 +111,7 @@ export const teamMembers = pgTable('team_members', {
 
 export const teamInvites = pgTable('team_invites', {
   id: id(),
-  teamId: uuid('team_id').notNull().references(() => teams.id),
+  teamId: uuid('team_id').notNull().references(() => teams.id, { onDelete: 'cascade' }),
   emailHash: text('email_hash').notNull(),
   /** SHA-256 hex of the mailed token; the token itself is never stored. */
   tokenHash: text('token_hash').notNull(),

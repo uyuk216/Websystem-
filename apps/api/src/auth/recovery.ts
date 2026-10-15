@@ -2,7 +2,7 @@ import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { t } from 'i18n';
 import { generateRecoveryCode, normalizeRecoveryInput } from 'shared';
 import { hash, verify } from '@node-rs/argon2';
-import type { Db } from '../db/client.js';
+import { withSystem, type Db } from '../db/client.js';
 import { accounts, passkeys, recoveryAttempts, recoveryRequests, sessions } from '../db/schema.js';
 import { decryptEmail, hashEmail, normalizeEmail } from '../crypto/email.js';
 import type { Mailer } from '../mail/mailer.js';
@@ -92,7 +92,8 @@ export async function approveRecovery(
   const to = decryptEmail(target.emailEnc, cfg.emailEncKey);
   const loc = target.locale === 'en' ? 'en' : 'ja';
 
-  await db.transaction(async (tx) => {
+  // Admin action across an arbitrary account's sessions and passkeys.
+  await withSystem(db, async (tx) => {
     const [req] = await tx
       .update(recoveryRequests)
       .set({ status: 'approved', decidedAt: now })

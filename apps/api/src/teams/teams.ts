@@ -2,7 +2,8 @@ import { randomBytes } from 'node:crypto';
 import { and, count, eq, gt, isNull } from 'drizzle-orm';
 import { t } from 'i18n';
 import { TEAM_MAX_MEMBERS, can, type TeamRole } from 'shared';
-import type { Db } from '../db/client.js';
+import { randomUUID } from 'node:crypto';
+import { withAccount, withSystem, type Db, type Tx } from '../db/client.js';
 import { accounts, owners, teamInvites, teamMembers, teams } from '../db/schema.js';
 import { hashEmail, normalizeEmail } from '../crypto/email.js';
 import { hashesEqual, sha256Hex } from '../auth/email-login.js';
@@ -16,7 +17,6 @@ export interface TeamsConfig {
   appOrigin: string;
 }
 
-type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 type TeamError = 'forbidden' | 'full' | 'last_owner' | 'not_member';
 export type Ok = { ok: true };
 
@@ -55,29 +55,33 @@ export async function ensureAccountOwner(db: Db | Tx, accountId: string): Promis
 }
 
 export async function createTeam(db: Db, accountId: string, name: string): Promise<{ teamId: string; ownerId: string }> {
-  return db.transaction(async (tx) => {
-    const [team] = await tx.insert(teams).values({ name }).returning({ id: teams.id });
-    await tx.insert(teamMembers).values({ teamId: team!.id, accountId, role: 'owner' });
-    const [o] = await tx.insert(owners).values({ kind: 'team', teamId: team!.id }).returning({ id: owners.id });
-    return { teamId: team!.id, ownerId: o!.id };
+  return withAccount(db, accountId, async (tx) => {
+    // Id is generated here: RETURNING would need SELECT visibility before the first member exists.
+    const teamId = randomUUID();
+    await tx.insert(teams).values({ id: teamId, name });
+    await tx.insert(teamMembers).values({ teamId, accountId, role: 'owner' });
+    const [o] = await tx.insert(owners).values({ kind: 'team', teamId }).returning({ id: owners.id });
+    return { teamId, ownerId: o!.id };
   });
 }
 
 export async function listTeams(db: Db, accountId: string): Promise<{ id: string; name: string; role: TeamRole }[]> {
-  const rows = await db.select({ id: teams.id, name: teams.name, role: teamMembers.role }).from(teamMembers)
-    .innerJoin(teams, eq(teams.id, teamMembers.teamId)).where(eq(teamMembers.accountId, accountId));
+  const rows = await withAccount(db, accountId, (tx) => tx.select({ id: teams.id, name: teams.name, role: teamMembers.role }).from(teamMembers)
+    .innerJoin(teams, eq(teams.id, teamMembers.teamId)).where(eq(teamMembers.accountId, accountId)));
   return rows.map((r) => ({ ...r, role: r.role as TeamRole }));
 }
 
 export async function getTeam(db: Db, teamId: string, accountId: string) {
   if (!UUID.test(teamId)) return null;
-  const [me] = await db.select({ role: teamMembers.role }).from(teamMembers)
-    .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.accountId, accountId)));
-  if (!me) return null;
-  const [team] = await db.select({ id: teams.id, name: teams.name }).from(teams).where(eq(teams.id, teamId));
-  const members = await db.select({ accountId: teamMembers.accountId, role: teamMembers.role, displayName: accounts.displayName })
-    .from(teamMembers).innerJoin(accounts, eq(accounts.id, teamMembers.accountId)).where(eq(teamMembers.teamId, teamId));
-  return { ...team!, role: me.role as TeamRole, members };
+  return withAccount(db, accountId, async (tx) => {
+    const [me] = await tx.select({ role: teamMembers.role }).from(teamMembers)
+      .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.accountId, accountId)));
+    if (!me) return null;
+    const [team] = await tx.select({ id: teams.id, name: teams.name }).from(teams).where(eq(teams.id, teamId));
+    const members = await tx.select({ accountId: teamMembers.accountId, role: teamMembers.role, displayName: accounts.displayName })
+      .from(teamMembers).innerJoin(accounts, eq(accounts.id, teamMembers.accountId)).where(eq(teamMembers.teamId, teamId));
+    return { ...team!, role: me.role as TeamRole, members };
+  });
 }
 
 export async function inviteMember(
@@ -86,7 +90,7 @@ export async function inviteMember(
   const normalized = normalizeEmail(email);
   const emailHash = hashEmail(normalized, cfg.emailHashKey);
   const token = randomBytes(32).toString('base64url');
-  const r = await db.transaction(async (tx) => {
+  const r = await withAccount(db, byAccountId, async (tx) => {
     if (!(await lockTeam(tx, teamId))) return { error: 'forbidden' as const };
     const role = await roleOf(tx, teamId, byAccountId);
     if (!role || !can(role, 'invite')) return { error: 'forbidden' as const };
@@ -113,7 +117,8 @@ export async function acceptInvite(
   db: Db, inviteId: string, token: string, accountId: string,
 ): Promise<{ teamId: string } | { error: 'invalid' | 'expired' | 'forbidden' | 'full' }> {
   if (!UUID.test(inviteId) || !UUID.test(accountId)) return { error: 'invalid' };
-  return db.transaction(async (tx) => {
+  // Pre-membership: the invitee cannot see the invite or team under RLS until accepted.
+  return withSystem(db, async (tx) => {
     const [pre] = await tx.select({ teamId: teamInvites.teamId }).from(teamInvites).where(eq(teamInvites.id, inviteId));
     if (!pre || !(await lockTeam(tx, pre.teamId))) return { error: 'invalid' as const };
     const [inv] = await tx.select().from(teamInvites).where(eq(teamInvites.id, inviteId)).for('update');
@@ -134,7 +139,7 @@ export async function acceptInvite(
 export async function changeRole(
   db: Db, teamId: string, byAccountId: string, targetAccountId: string, role: 'admin' | 'member',
 ): Promise<Ok | { error: TeamError }> {
-  return db.transaction(async (tx) => {
+  return withAccount(db, byAccountId, async (tx) => {
     if (!(await lockTeam(tx, teamId))) return { error: 'not_member' as const };
     const by = await roleOf(tx, teamId, byAccountId);
     if (!by) return { error: 'not_member' as const };
@@ -149,7 +154,7 @@ export async function changeRole(
 }
 
 export async function removeMember(db: Db, teamId: string, byAccountId: string, targetAccountId: string): Promise<Ok | { error: TeamError }> {
-  return db.transaction(async (tx) => {
+  return withAccount(db, byAccountId, async (tx) => {
     if (!(await lockTeam(tx, teamId))) return { error: 'not_member' as const };
     const by = await roleOf(tx, teamId, byAccountId);
     if (!by) return { error: 'not_member' as const };
@@ -164,7 +169,7 @@ export async function removeMember(db: Db, teamId: string, byAccountId: string, 
 }
 
 export async function leaveTeam(db: Db, teamId: string, accountId: string): Promise<Ok | { error: TeamError }> {
-  return db.transaction(async (tx) => {
+  return withAccount(db, accountId, async (tx) => {
     if (!(await lockTeam(tx, teamId))) return { error: 'not_member' as const };
     const role = await roleOf(tx, teamId, accountId);
     if (!role) return { error: 'not_member' as const };
@@ -175,7 +180,7 @@ export async function leaveTeam(db: Db, teamId: string, accountId: string): Prom
 }
 
 export async function transferOwnership(db: Db, teamId: string, fromAccountId: string, toAccountId: string): Promise<Ok | { error: TeamError }> {
-  return db.transaction(async (tx) => {
+  return withAccount(db, fromAccountId, async (tx) => {
     if (!(await lockTeam(tx, teamId))) return { error: 'not_member' as const };
     const from = await roleOf(tx, teamId, fromAccountId);
     if (!from) return { error: 'not_member' as const };
@@ -189,13 +194,12 @@ export async function transferOwnership(db: Db, teamId: string, fromAccountId: s
 }
 
 export async function deleteTeam(db: Db, teamId: string, byAccountId: string): Promise<Ok | { error: TeamError }> {
-  return db.transaction(async (tx) => {
+  return withAccount(db, byAccountId, async (tx) => {
     if (!(await lockTeam(tx, teamId))) return { error: 'not_member' as const };
     const role = await roleOf(tx, teamId, byAccountId);
     if (!role) return { error: 'not_member' as const };
     if (!can(role, 'deleteTeam')) return { error: 'forbidden' as const };
     await tx.delete(teamInvites).where(eq(teamInvites.teamId, teamId));
-    await tx.delete(teamMembers).where(eq(teamMembers.teamId, teamId));
     await tx.delete(owners).where(and(eq(owners.kind, 'team'), eq(owners.teamId, teamId)));
     await tx.delete(teams).where(eq(teams.id, teamId));
     return { ok: true as const };

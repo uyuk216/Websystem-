@@ -4,7 +4,7 @@ import {
   type AuthenticationResponseJSON, type PublicKeyCredentialCreationOptionsJSON, type PublicKeyCredentialRequestOptionsJSON,
   type AuthenticatorTransport, type RegistrationResponseJSON,
 } from '@simplewebauthn/server';
-import type { Db } from '../db/client.js';
+import { withAccount, withSystem, type Db } from '../db/client.js';
 import { accounts, passkeys, webauthnChallenges } from '../db/schema.js';
 import { decryptEmail } from '../crypto/email.js';
 import { UUID } from './cross-device.js';
@@ -40,7 +40,7 @@ export async function startPasskeyRegistration(
 ): Promise<{ challengeId: string; options: PublicKeyCredentialCreationOptionsJSON }> {
   const [acct] = await db.select({ emailEnc: accounts.emailEnc, displayName: accounts.displayName }).from(accounts).where(eq(accounts.id, accountId));
   if (!acct) throw new Error('account not found');
-  const existing = await db.select({ id: passkeys.id, transports: passkeys.transports }).from(passkeys).where(eq(passkeys.accountId, accountId));
+  const existing = await withAccount(db, accountId, (tx) => tx.select({ id: passkeys.id, transports: passkeys.transports }).from(passkeys).where(eq(passkeys.accountId, accountId)));
   const options = await generateRegistrationOptions({
     rpName: RP_NAME,
     rpID: cfg.rpId,
@@ -65,9 +65,9 @@ export async function finishPasskeyRegistration(
     });
     if (!v.verified) return { error: 'invalid' };
     const c = v.registrationInfo.credential;
-    const rows = await db.insert(passkeys).values({
+    const rows = await withAccount(db, accountId, (tx) => tx.insert(passkeys).values({
       id: c.id, accountId, publicKey: Buffer.from(c.publicKey), counter: c.counter, transports: c.transports ?? [],
-    }).onConflictDoNothing().returning({ id: passkeys.id });
+    }).onConflictDoNothing().returning({ id: passkeys.id }));
     return rows.length ? { ok: true } : { error: 'invalid' };
   } catch {
     return { error: 'invalid' };
@@ -87,7 +87,8 @@ export async function finishPasskeyLogin(
 ): Promise<{ accountId: string } | { error: 'invalid' }> {
   const challenge = await consume(db, input.challengeId, 'login', null);
   if (!challenge || typeof input.response?.id !== 'string') return { error: 'invalid' };
-  const [pk] = await db.select().from(passkeys).where(eq(passkeys.id, input.response.id));
+  // Pre-authentication: the credential id identifies the account, not the other way round.
+  const [pk] = await withSystem(db, (tx) => tx.select().from(passkeys).where(eq(passkeys.id, input.response.id)));
   if (!pk) return { error: 'invalid' };
   try {
     const v = await verifyAuthenticationResponse({
@@ -98,8 +99,8 @@ export async function finishPasskeyLogin(
     const next = v.authenticationInfo.newCounter;
     // Compare-and-set on the counter; a counter that did not advance (clone/rollback) is rejected unless both are 0.
     if (next <= pk.counter && !(next === 0 && pk.counter === 0)) return { error: 'invalid' };
-    const rows = await db.update(passkeys).set({ counter: next, lastUsedAt: new Date() })
-      .where(and(eq(passkeys.id, pk.id), eq(passkeys.counter, pk.counter))).returning({ id: passkeys.id });
+    const rows = await withSystem(db, (tx) => tx.update(passkeys).set({ counter: next, lastUsedAt: new Date() })
+      .where(and(eq(passkeys.id, pk.id), eq(passkeys.counter, pk.counter))).returning({ id: passkeys.id }));
     return rows.length ? { accountId: pk.accountId } : { error: 'invalid' };
   } catch {
     return { error: 'invalid' };
