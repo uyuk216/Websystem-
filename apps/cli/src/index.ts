@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
 import { parseArgs } from 'node:util';
 import { clearConfig, loadConfig, saveConfig } from './config.js';
-import { deploy, listApps } from './commands.js';
+import { deploy, envList, envSet, envUnset, listApps } from './commands.js';
 
 const HELP = `Usage: yourservice <command>
 
@@ -10,6 +10,9 @@ Commands:
   login                      Save an API token (paste it when prompted)
   apps                       List your apps
   deploy [dir] --app <name>  Zip a directory (honoring .gitignore) and deploy it
+  env list --app <name>      List variable names (values are never shown)
+  env set NAME=VALUE --app <name>   Set a variable; \`env set NAME --stdin\` reads the value from stdin
+  env unset NAME --app <name>       Remove a variable (restart the app to apply changes)
   logout                     Remove the saved token
 
 Environment:
@@ -25,6 +28,12 @@ async function promptHidden(prompt: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output, terminal: process.stdin.isTTY });
   muted = true;
   try { return await rl.question(''); } finally { rl.close(); if (process.stdin.isTTY) process.stdout.write('\n'); }
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const c of process.stdin) chunks.push(c as Buffer);
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 /** A bearer token must not cross the network in cleartext unless the user insists. */
@@ -54,7 +63,7 @@ export async function main(argv: string[], env: Record<string, string | undefine
     if (cmd === 'logout') { clearConfig(env); out.log('Logged out.'); return 0; }
     const cfg = loadConfig(env);
     if (!cfg) throw new Error('Not logged in. Run `yourservice login`.');
-    if (cmd === 'apps' || cmd === 'deploy') checkApiUrl(api, insecure);
+    if (cmd === 'apps' || cmd === 'deploy' || cmd === 'env') checkApiUrl(api, insecure);
     if (cmd === 'apps') {
       for (const a of await listApps({ api, token: cfg.token })) out.log(a.name);
       return 0;
@@ -64,6 +73,40 @@ export async function main(argv: string[], env: Record<string, string | undefine
       if (!values.app) throw new Error('Missing --app <name>.');
       await deploy({ api, token: cfg.token, dir: positionals[0] ?? '.', app: values.app, out });
       return 0;
+    }
+    if (cmd === 'env') {
+      const { values, positionals } = parseArgs({ args: rest, options: { app: { type: 'string' }, stdin: { type: 'boolean' } }, allowPositionals: true });
+      if (!values.app) throw new Error('Missing --app <name>.');
+      const [sub, arg] = positionals;
+      const b = { api, token: cfg.token, app: values.app };
+      if (sub === 'list') {
+        for (const v of await envList(b)) out.log(v.name);
+        return 0;
+      }
+      if (sub === 'unset') {
+        if (!arg) throw new Error('Usage: env unset NAME --app <name>');
+        await envUnset({ ...b, name: arg });
+        out.log(`Unset ${arg}. Restart the app to apply.`);
+        return 0;
+      }
+      if (sub === 'set') {
+        if (!arg) throw new Error('Usage: env set NAME=VALUE --app <name>  (or env set NAME --stdin)');
+        let name = arg;
+        let value: string;
+        if (values.stdin) {
+          if (arg.includes('=')) throw new Error('With --stdin pass only NAME; the value is read from stdin.');
+          value = (await readStdin()).replace(/\r?\n$/, '');
+        } else {
+          const i = arg.indexOf('=');
+          if (i < 1) throw new Error('Expected NAME=VALUE (or use --stdin).');
+          name = arg.slice(0, i);
+          value = arg.slice(i + 1);
+        }
+        await envSet({ ...b, name, value });
+        out.log(`Set ${name}. Restart the app to apply.`);
+        return 0;
+      }
+      throw new Error('Usage: env list|set|unset --app <name>');
     }
     console.error(`Unknown command: ${cmd}\n\n${HELP}`);
     return 1;
