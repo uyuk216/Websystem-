@@ -5,3 +5,6 @@ export * from './ingest/secret-scan.js';
 export * from './runtime/driver.js';
 export * from './runtime/docker.js';
 export * from './runtime/kubernetes-manifests.js';
+export * from './build/detect.js';
+export * from './build/dockerfiles.js';
+export * from './build/build.js';

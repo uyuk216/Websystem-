@@ -97,3 +97,5 @@ Migrations 0006/0007 enable and FORCE RLS on accounts, owners, sessions, passkey
 sudo iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
 sudo iptables -I DOCKER-USER -p tcp --dport 25 -j DROP
 ```
+
+`ys-apps` は `com.docker.network.bridge.enable_icc=false` で作成され、アプリ同士は通信できません（既存のネットワークが無効化されていない場合は、コンテナがなければ自動で作り直します）。コンテナ名は `ys-app-<appId>-<deploymentId 先頭 8 文字>` で、同じアプリの新旧デプロイを同時に動かせます。

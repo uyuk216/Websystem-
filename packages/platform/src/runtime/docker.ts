@@ -1,4 +1,5 @@
 import Docker from 'dockerode';
+import { assertUuid } from './driver.js';
 import type { AppRunSpec, RunHandle, RuntimeDriver, RuntimeStatus } from './driver.js';
 
 export const APPS_NETWORK = 'ys-apps';
@@ -11,13 +12,12 @@ export interface DockerDriverOptions {
   warn?: (message: string) => void;
 }
 
-export const containerName = (appId: string): string => `ys-app-${appId}`;
-
-function isRoot(user: string | undefined): boolean {
-  if (!user) return true;
-  const name = user.split(':')[0] ?? '';
-  return name === '' || name === '0' || name === 'root';
-}
+export const containerName = (appId: string, deploymentId: string): string => {
+  assertUuid(appId, 'appId');
+  assertUuid(deploymentId, 'deploymentId');
+  return `ys-app-${appId}-${deploymentId.slice(0, 8)}`;
+};
+const ICC_OPTION = 'com.docker.network.bridge.enable_icc';
 
 export class DockerDriver implements RuntimeDriver {
   private readonly docker: Docker;
@@ -40,10 +40,22 @@ export class DockerDriver implements RuntimeDriver {
 
   private ensureNetwork(): Promise<void> {
     this.networkReady ??= (async () => {
-      const existing = await this.docker.listNetworks({ filters: { name: [APPS_NETWORK] } });
-      if (existing.some((n) => n.Name === APPS_NETWORK)) return;
+      const existing = (await this.docker.listNetworks({ filters: { name: [APPS_NETWORK] } })).find(
+        (n) => n.Name === APPS_NETWORK,
+      );
+      if (existing) {
+        const info = await this.docker.getNetwork(existing.Id).inspect();
+        if (info.Options?.[ICC_OPTION] === 'false') return;
+        // Created without ICC isolation: recreate (fails if containers are still attached).
+        await this.docker.getNetwork(existing.Id).remove();
+      }
       try {
-        await this.docker.createNetwork({ Name: APPS_NETWORK, Driver: 'bridge', CheckDuplicate: true });
+        await this.docker.createNetwork({
+          Name: APPS_NETWORK,
+          Driver: 'bridge',
+          CheckDuplicate: true,
+          Options: { [ICC_OPTION]: 'false' },
+        });
       } catch (err) {
         if ((err as { statusCode?: number }).statusCode !== 409) throw err;
       }
@@ -56,17 +68,17 @@ export class DockerDriver implements RuntimeDriver {
 
   async start(spec: AppRunSpec): Promise<RunHandle> {
     await this.ensureNetwork();
-    const imageInfo = await this.docker.getImage(spec.image).inspect();
-    const user = isRoot(imageInfo.Config?.User) ? NON_ROOT_USER : imageInfo.Config.User;
-    await this.stop(spec.appId);
+    assertUuid(spec.ownerId, 'ownerId');
+    const name = containerName(spec.appId, spec.deploymentId);
+    await this.docker.getImage(spec.image).inspect();
     const port = `${spec.port}/tcp`;
     const env = { ...spec.env, PORT: String(spec.port) };
     const container = await this.docker.createContainer({
-      name: containerName(spec.appId),
+      name,
       Image: spec.image,
-      User: user,
+      User: NON_ROOT_USER,
       Env: Object.entries(env).map(([k, v]) => `${k}=${v}`),
-      Labels: { 'ys.app': spec.appId, 'ys.owner': spec.ownerId },
+      Labels: { 'ys.app': spec.appId, 'ys.deployment': spec.deploymentId, 'ys.owner': spec.ownerId },
       ExposedPorts: { [port]: {} },
       HostConfig: {
         Privileged: false,
@@ -84,12 +96,28 @@ export class DockerDriver implements RuntimeDriver {
         ...(this.runtime ? { Runtime: this.runtime } : {}),
       },
     });
-    await container.start();
-    return { appId: spec.appId, containerId: container.id };
+    try {
+      await container.start();
+    } catch (err) {
+      await container.remove({ force: true }).catch(() => {});
+      throw err;
+    }
+    return { appId: spec.appId, deploymentId: spec.deploymentId, containerId: container.id };
   }
 
-  async stop(appId: string): Promise<void> {
-    const container = this.docker.getContainer(containerName(appId));
+  private async find(appId: string, deploymentId?: string): Promise<Docker.ContainerInfo[]> {
+    assertUuid(appId, 'appId');
+    const label = [`ys.app=${appId}`];
+    if (deploymentId) {
+      assertUuid(deploymentId, 'deploymentId');
+      label.push(`ys.deployment=${deploymentId}`);
+    }
+    const list = await this.docker.listContainers({ all: true, filters: { label } });
+    return list.sort((x, y) => y.Created - x.Created);
+  }
+
+  private async remove(id: string): Promise<void> {
+    const container = this.docker.getContainer(id);
     try {
       await container.stop({ t: 2 });
     } catch (err) {
@@ -104,10 +132,25 @@ export class DockerDriver implements RuntimeDriver {
     }
   }
 
-  async status(appId: string): Promise<RuntimeStatus> {
+  async stop(appId: string): Promise<void> {
+    await Promise.all((await this.find(appId)).map((c) => this.remove(c.Id)));
+  }
+
+  async stopDeployment(appId: string, deploymentId: string): Promise<void> {
+    await Promise.all((await this.find(appId, deploymentId)).map((c) => this.remove(c.Id)));
+  }
+
+  /** Prefers a running container, otherwise the newest. */
+  private async pick(appId: string, deploymentId?: string): Promise<Docker.ContainerInfo | undefined> {
+    const list = await this.find(appId, deploymentId);
+    return list.find((c) => c.State === 'running') ?? list[0];
+  }
+
+  async status(appId: string, deploymentId?: string): Promise<RuntimeStatus> {
+    const c = await this.pick(appId, deploymentId);
+    if (!c) return 'stopped';
     try {
-      const info = await this.docker.getContainer(containerName(appId)).inspect();
-      const s = info.State;
+      const s = (await this.docker.getContainer(c.Id).inspect()).State;
       if (s.Running && !s.Restarting) return 'running';
       if (s.Restarting || s.Status === 'created') return 'starting';
       if (s.Status === 'exited' || s.Status === 'dead') return s.ExitCode === 0 ? 'stopped' : 'crashed';
@@ -118,9 +161,11 @@ export class DockerDriver implements RuntimeDriver {
     }
   }
 
-  async endpoint(appId: string): Promise<{ host: string; port: number } | null> {
+  async endpoint(appId: string, deploymentId?: string): Promise<{ host: string; port: number } | null> {
+    const c = await this.pick(appId, deploymentId);
+    if (!c) return null;
     try {
-      const info = await this.docker.getContainer(containerName(appId)).inspect();
+      const info = await this.docker.getContainer(c.Id).inspect();
       if (!info.State.Running) return null;
       for (const bindings of Object.values(info.NetworkSettings.Ports ?? {})) {
         const b = bindings?.find((x) => x.HostIp === '127.0.0.1');
@@ -133,10 +178,12 @@ export class DockerDriver implements RuntimeDriver {
     }
   }
 
-  async logs(appId: string, tail: number): Promise<string[]> {
+  async logs(appId: string, tail: number, deploymentId?: string): Promise<string[]> {
+    const c = await this.pick(appId, deploymentId);
+    if (!c) return [];
     try {
       const buf = (await this.docker
-        .getContainer(containerName(appId))
+        .getContainer(c.Id)
         .logs({ stdout: true, stderr: true, tail, follow: false })) as unknown as Buffer;
       const lines = demux(buf).split('\n');
       if (lines.at(-1) === '') lines.pop();

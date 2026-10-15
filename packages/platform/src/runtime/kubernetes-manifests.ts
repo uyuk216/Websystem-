@@ -1,13 +1,15 @@
-import type { AppRunSpec } from './driver.js';
+import { assertUuid, type AppRunSpec } from './driver.js';
 
 export const METADATA_IP_CIDR = '169.254.169.254/32';
 
 export function namespaceFor(ownerId: string): string {
-  return `ys-o-${ownerId.replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 12)}`;
+  assertUuid(ownerId, 'ownerId');
+  return `ys-o-${ownerId.replace(/-/g, '').toLowerCase()}`;
 }
 
 /** Pure manifest builder; applying them is the Kubernetes driver (Task 8). */
 export function buildKubernetesManifests(spec: AppRunSpec): object[] {
+  assertUuid(spec.appId, 'appId');
   const ns = namespaceFor(spec.ownerId);
   const name = `ys-app-${spec.appId}`;
   const labels = { 'ys.app': spec.appId };
@@ -16,7 +18,15 @@ export function buildKubernetesManifests(spec: AppRunSpec): object[] {
   const env = Object.entries({ ...spec.env, PORT: String(spec.port) }).map(([k, v]) => ({ name: k, value: v }));
 
   return [
-    { apiVersion: 'v1', kind: 'Namespace', metadata: { name: ns, labels: { 'ys.owner': ns } } },
+    { apiVersion: 'v1', kind: 'Namespace', metadata: {
+        name: ns,
+        labels: {
+          'ys.owner': ns,
+          'pod-security.kubernetes.io/enforce': 'restricted',
+          'pod-security.kubernetes.io/enforce-version': 'latest',
+        },
+      },
+    },
     {
       apiVersion: 'apps/v1',
       kind: 'Deployment',
@@ -114,7 +124,24 @@ export function buildKubernetesManifests(spec: AppRunSpec): object[] {
           'limits.memory': `${spec.limits.memoryMb * 2}Mi`,
           'requests.cpu': String(spec.limits.cpu * 2),
           'limits.cpu': String(spec.limits.cpu * 2),
+          'requests.ephemeral-storage': '256Mi',
+          'limits.ephemeral-storage': '256Mi',
         },
+      },
+    },
+    {
+      apiVersion: 'v1',
+      kind: 'LimitRange',
+      metadata: { name: 'ys-owner-limits', namespace: ns },
+      spec: {
+        limits: [
+          {
+            type: 'Container',
+            default: { memory: mem, cpu, 'ephemeral-storage': '128Mi' },
+            defaultRequest: { memory: mem, cpu, 'ephemeral-storage': '128Mi' },
+            max: { memory: mem, cpu, 'ephemeral-storage': '128Mi' },
+          },
+        ],
       },
     },
   ];

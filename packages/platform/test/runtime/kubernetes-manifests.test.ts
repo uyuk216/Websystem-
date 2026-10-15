@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { buildKubernetesManifests, namespaceFor } from '../../src/runtime/kubernetes-manifests.js';
 
 const spec = {
-  appId: 'app1',
-  ownerId: 'abcdef0123456789',
+  appId: '11111111-1111-4111-8111-111111111111',
+  deploymentId: '22222222-2222-4222-8222-222222222222',
+  ownerId: '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
   image: 'registry.local/app1:v1',
   env: { FOO: 'bar' },
   limits: { memoryMb: 512, cpu: 0.5, pids: 256 },
@@ -17,10 +18,10 @@ describe('buildKubernetesManifests', () => {
     expect(buildKubernetesManifests(spec)).toMatchSnapshot();
   });
 
-  it('uses a per-owner namespace of the first 12 owner chars', () => {
-    expect(namespaceFor(spec.ownerId)).toBe('ys-o-abcdef012345');
+  it('uses a per-owner namespace of the full owner id without dashes', () => {
+    expect(namespaceFor(spec.ownerId)).toBe('ys-o-0a1b2c3d4e5f4a6b8c7d9e0f1a2b3c4d');
     for (const m of buildKubernetesManifests(spec) as any[]) {
-      expect(m.kind === 'Namespace' ? m.metadata.name : m.metadata.namespace).toBe('ys-o-abcdef012345');
+      expect(m.kind === 'Namespace' ? m.metadata.name : m.metadata.namespace).toBe('ys-o-0a1b2c3d4e5f4a6b8c7d9e0f1a2b3c4d');
     }
   });
 
@@ -63,5 +64,16 @@ describe('buildKubernetesManifests', () => {
   it('includes Service and ResourceQuota', () => {
     expect(find('Service').spec.ports[0].port).toBe(8080);
     expect(find('ResourceQuota').spec.hard.pods).toBe('2');
+  });
+});
+
+describe('manifest extras', () => {
+  it('enforces restricted pod security, LimitRange, ephemeral-storage quota, and validates ids', () => {
+    expect(find('Namespace').metadata.labels['pod-security.kubernetes.io/enforce']).toBe('restricted');
+    expect(find('LimitRange').spec.limits[0].max.memory).toBe('512Mi');
+    expect(find('ResourceQuota').spec.hard['limits.ephemeral-storage']).toBeDefined();
+    expect(namespaceFor(spec.ownerId).length).toBeLessThanOrEqual(63);
+    expect(() => buildKubernetesManifests({ ...spec, ownerId: 'x' })).toThrow(/ownerId/);
+    expect(() => buildKubernetesManifests({ ...spec, appId: '../x' })).toThrow(/appId/);
   });
 });
