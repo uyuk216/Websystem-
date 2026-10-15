@@ -22,7 +22,7 @@ export function coarseDeviceLabel(ua: string | undefined): string {
   const br = /Edg\//.test(ua) ? 'Edge' : /OPR\/|Opera/.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\/|CriOS/.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : null;
   return os && br ? `${os} / ${br}` : os ?? br ?? 'Unknown device';
 }
-const deviceLabel = (c: Context): string => (c.req.header('user-agent') ?? 'unknown').slice(0, 100);
+const deviceLabel = (c: Context): string => coarseDeviceLabel(c.req.header('user-agent'));
 
 export interface AppDeps {
   db: Db;
@@ -101,9 +101,11 @@ export function createApp(deps?: AppDeps): Hono {
       setSessionCookie(c, s.token);
       return c.json({ ok: true });
     });
-    app.get('/auth/email/link', attemptLimit, async (c) => {
-      const cid = c.req.query('c');
-      const tok = c.req.query('t');
+    // POST (not GET): opening the link changes state, and mail scanners prefetch GET links.
+    app.post('/auth/email/link', attemptLimit, async (c) => {
+      const b = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+      const cid = b?.c;
+      const tok = b?.t;
       if (!str(cid, 64) || !str(tok, 200)) return c.json({ error: 'invalid' }, 400);
       const r = await openEmailLink(deps.db, cid, tok, c.get('deviceId'));
       if ('error' in r) return c.json({ error: r.error }, 400);

@@ -88,7 +88,7 @@ export async function consumeChallenge(
   requesterDeviceId: string | null,
 ): Promise<ChallengeCheck> {
   const [c] = await tx.select().from(emailChallenges).where(eq(emailChallenges.id, challengeId)).for('update');
-  if (!c || c.consumedAt || c.purpose !== purpose) return { error: 'invalid' };
+  if (!c || c.consumedAt || c.purpose !== purpose || c.crossDeviceState === 'failed') return { error: 'invalid' };
   if (requesterDeviceId !== null && c.requesterDeviceId !== requesterDeviceId) return { error: 'invalid' };
   if (c.attempts >= CHALLENGE_MAX_ATTEMPTS) return { error: 'locked' };
   if (c.expiresAt.getTime() <= Date.now()) return { error: 'expired' };
@@ -106,7 +106,7 @@ export async function verifyEmailCode(
   code: string,
   requesterDeviceId: string,
 ): Promise<{ accountId: string } | { error: 'invalid' | 'expired' | 'locked' }> {
-  if (!/^[0-9a-f-]{36}$/.test(challengeId)) return { error: 'invalid' };
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(challengeId)) return { error: 'invalid' };
   return db.transaction(async (tx) => {
     const r = await consumeChallenge(tx, challengeId, code, 'login', requesterDeviceId);
     if ('error' in r) return r;

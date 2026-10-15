@@ -8,6 +8,7 @@ import { startEmailChallenge } from '../src/auth/email-login.js';
 import {
   completeCrossDeviceLogin, confirmNumber, getConfirmChoices, getRequesterScreen, openEmailLink,
 } from '../src/auth/cross-device.js';
+import { verifyEmailCode } from '../src/auth/email-login.js';
 import { createApp } from '../src/http/app.js';
 
 const cfg = { emailEncKey: Buffer.alloc(32, 1), emailHashKey: Buffer.alloc(32, 2), adminEmail: 'admin@example.com', appOrigin: 'https://app.example.com' };
@@ -111,6 +112,36 @@ describe('cross-device login', () => {
       expect(await getConfirmChoices(db, id, s)).toEqual({ error: 'invalid' });
       expect(await getRequesterScreen(db, id, 'd1', cfg.appOrigin)).toEqual({ state: 'none' });
       expect(await completeCrossDeviceLogin(db, id, 'd1')).toEqual({ error: 'invalid' });
+      const [row] = await db.select().from(emailChallenges).where(eq(emailChallenges.id, id));
+      expect(row!.crossDeviceState).toBe('failed');
+    });
+  });
+
+  it('a failed challenge cannot be completed by typing the code', async () => {
+    await withTestDb(async (db) => {
+      await acct(db, 'foo@example.com');
+      const mail = createFakeMailer();
+      const r = await startEmailChallenge(db, mail, { email: 'foo@example.com', purpose: 'login', locale: 'ja', requesterDeviceId: 'd1' }, cfg);
+      if (!('challengeId' in r)) throw new Error('rate');
+      await new Promise((res) => setTimeout(res, 20));
+      await openEmailLink(db, r.challengeId, mail.lastLinkToken(), 'phone');
+      const scr = await getRequesterScreen(db, r.challengeId, 'd1', cfg.appOrigin);
+      if (scr.state !== 'awaiting_scan') throw new Error('state');
+      const ch = await getConfirmChoices(db, r.challengeId, tokenOf(scr));
+      if ('error' in ch) throw new Error('choices');
+      await confirmNumber(db, r.challengeId, tokenOf(scr), wrong(ch.choices, scr.number));
+      expect(await verifyEmailCode(db, r.challengeId, mail.lastCode(), 'd1')).toEqual({ error: 'invalid' });
+    });
+  });
+
+  it('malformed 36-char ids are invalid, not 500', async () => {
+    await withTestDb(async (db) => {
+      const bad = 'z'.repeat(8) + '-' + 'z'.repeat(4) + '-' + 'z'.repeat(4) + '-' + 'z'.repeat(4) + '-' + 'z'.repeat(12);
+      const dashes = '-'.repeat(36);
+      for (const x of [bad, dashes]) {
+        expect(await openEmailLink(db, x, 't', 'd')).toEqual({ error: 'invalid' });
+        expect(await verifyEmailCode(db, x, '123456', 'd')).toEqual({ error: 'invalid' });
+      }
     });
   });
 
@@ -143,7 +174,8 @@ describe('cross-device http', () => {
       const app = createApp({ db, mailer: createFakeMailer(), config: cfg });
       const { id, tok } = await mk(db);
       // opener is a different device (no matching did cookie)
-      const open = await app.request(`/auth/email/link?c=${id}&t=${tok}`, { headers: { 'user-agent': 'x' } });
+      expect((await app.request(`/auth/email/link?c=${id}&t=${tok}`)).status).toBe(404); // GET must not change state
+      const open = await app.request('/auth/email/link', { method: 'POST', body: JSON.stringify({ c: id, t: tok }), headers: { 'user-agent': 'x' } });
       expect(await open.json()).toEqual({ result: 'cross_device_pending' });
       const bad = await app.request(`/auth/email/screen?c=${id}`);
       expect(await bad.json()).toEqual({ state: 'none' });

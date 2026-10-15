@@ -24,7 +24,7 @@ export async function registerAccount(
 ): Promise<{ accountId: string; recoveryCode: string } | { error: 'under13' | 'invalid' | 'exists' }> {
   const age = checkAge(input.birthDate, new Date());
   if (!age.ok) return { error: age.reason };
-  if (!/^[0-9a-f-]{36}$/.test(input.challengeId)) return { error: 'invalid' };
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(input.challengeId)) return { error: 'invalid' };
   const email = normalizeEmail(input.email);
   const emailHash = hashEmail(email, cfg.emailHashKey);
   const recoveryCode = generateRecoveryCode();
