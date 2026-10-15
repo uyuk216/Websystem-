@@ -3,3 +3,7 @@ export type { AgeCheck } from './age.js';
 export { RECOVERY_ALPHABET, RECOVERY_GROUPS, generateRecoveryCode, normalizeRecoveryInput } from './recovery-code.js';
 export { TEAM_MAX_MEMBERS, can } from './team-rules.js';
 export type { TeamRole, TeamAction } from './team-rules.js';
+export { STATIC_LIMITS } from './plans.js';
+export { validateAppName, APP_NAME_RE } from './app-name.js';
+export type { AppNameCheck } from './app-name.js';
+export { RESERVED_APP_NAMES } from './reserved-names.js';

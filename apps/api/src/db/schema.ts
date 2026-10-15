@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
-  bigint, check, customType, index, integer, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid,
+  bigint, check, customType, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid,
 } from 'drizzle-orm/pg-core';
 
 const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
@@ -136,3 +136,35 @@ export const owners = pgTable('owners', {
     (${t.kind} = 'team' AND ${t.teamId} IS NOT NULL AND ${t.accountId} IS NULL)
   )`),
 ]);
+
+export const apps = pgTable('apps', {
+  id: id(),
+  ownerId: uuid('owner_id').notNull().references(() => owners.id),
+  name: text('name').notNull().unique(),
+  kind: text('kind', { enum: ['static'] }).notNull().default('static'),
+  publishDir: text('publish_dir').notNull().default(''),
+  activeDeploymentId: uuid('active_deployment_id'),
+  githubRepo: text('github_repo'),
+  githubBranch: text('github_branch'),
+  githubInstallationId: text('github_installation_id'),
+  createdAt: createdAt(),
+}, (t) => [index('apps_owner_idx').on(t.ownerId)]);
+
+export const deployments = pgTable('deployments', {
+  id: id(),
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  source: text('source', { enum: ['upload', 'cli', 'github'] }).notNull(),
+  status: text('status', {
+    enum: ['queued', 'processing', 'live', 'superseded', 'failed', 'blocked_secret', 'held_for_review'],
+  }).notNull().default('queued'),
+  sourceKey: text('source_key').notNull(),
+  siteKey: text('site_key'),
+  totalBytes: bigint('total_bytes', { mode: 'number' }),
+  fileCount: integer('file_count'),
+  message: text('message'),
+  findings: jsonb('findings'),
+  commitSha: text('commit_sha'),
+  createdBy: uuid('created_by').references(() => accounts.id),
+  createdAt: createdAt(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+}, (t) => [index('deployments_app_idx').on(t.appId, t.createdAt)]);

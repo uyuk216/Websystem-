@@ -10,6 +10,7 @@ import { recordLogin, listLoginEvents } from '../auth/login-history.js';
 import { startPasskeyRegistration, finishPasskeyRegistration, startPasskeyLogin, finishPasskeyLogin } from '../auth/passkeys.js';
 import { acceptInvite, changeRole, createTeam, deleteTeam, getTeam, inviteMember, leaveTeam, listTeams, removeMember, transferOwnership } from '../teams/teams.js';
 import { UUID } from '../auth/cross-device.js';
+import { createApp as createAppRecord, deleteApp, getApp, listApps, updateApp } from '../apps/apps.js';
 import { createSession, listSessions, revokeSession } from '../auth/sessions.js';
 import { randomBytes } from 'node:crypto';
 import { getCookie, setCookie } from 'hono/cookie';
@@ -236,6 +237,28 @@ export function createApp(deps?: AppDeps): Hono {
       if (!str(b?.toAccountId, 64)) return c.json({ error: 'invalid' }, 400);
       const r = await transferOwnership(deps.db, c.req.param('id'), c.get('accountId'), b.toAccountId);
       return 'error' in r ? teamErr(c, r.error) : c.json(r);
+    });
+    const appStatus = { format: 400, reserved: 400, taken: 409, forbidden: 403, limit: 409, not_found: 404, invalid: 400 } as const;
+    app.get('/apps', session, async (c) => c.json({ apps: await listApps(deps.db, c.get('accountId')) }));
+    app.post('/apps', session, async (c) => {
+      const b = await jsonBody(c);
+      if (!str(b?.name, 100) || !str(b.ownerId, 64) || (b.publishDir !== undefined && !str(b.publishDir, 200))) return c.json({ error: 'invalid' }, 400);
+      const r = await createAppRecord(deps.db, c.get('accountId'), { name: b.name, ownerId: b.ownerId, publishDir: b.publishDir as string | undefined });
+      return 'error' in r ? c.json({ error: r.error }, appStatus[r.error]) : c.json(r, 201);
+    });
+    app.get('/apps/:id', session, async (c) => {
+      const a = await getApp(deps.db, c.get('accountId'), c.req.param('id'));
+      return a ? c.json(a) : c.json({ error: 'not_found' }, 404);
+    });
+    app.patch('/apps/:id', session, async (c) => {
+      const b = await jsonBody(c);
+      if (!str(b?.publishDir, 200)) return c.json({ error: 'invalid' }, 400);
+      const r = await updateApp(deps.db, c.get('accountId'), c.req.param('id'), { publishDir: b.publishDir });
+      return 'error' in r ? c.json({ error: r.error }, appStatus[r.error]) : c.json(r);
+    });
+    app.delete('/apps/:id', session, async (c) => {
+      const r = await deleteApp(deps.db, c.get('accountId'), c.req.param('id'));
+      return 'error' in r ? c.json({ error: r.error }, appStatus[r.error]) : c.json(r);
     });
     app.post('/auth/logout', session, async (c) => {
       await revokeSession(deps.db, c.get('accountId'), c.get('sessionId'));

@@ -57,6 +57,13 @@
       "when": 1792067595731,
       "tag": "0007_faulty_lila_cheney",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792071688358,
+      "tag": "0008_noisy_mordo",
+      "breakpoints": true
     }
   ]
 }
