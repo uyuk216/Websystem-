@@ -59,6 +59,8 @@ export interface DynamicRuntime {
   driver: RuntimeDriver;
   envKey: Buffer;
   health?: HealthOptions;
+  /** Cross-process per-app lock (see createWakeLocker). Held by rollouts so the sleeper and edge wakes never race them. */
+  lock?: <T>(appId: string, fn: () => Promise<T>) => Promise<T>;
 }
 
 /**
@@ -111,9 +113,13 @@ export async function rolloutDynamic(db: Db, deploymentId: string, rt?: DynamicR
   if (!d?.imageRef) return;
   const { appId, imageRef } = d;
 
+  // Held through start, health check and switch: the sleeper and the edge's wake never see a half-started app.
+  const body = async (): Promise<void> => {
   let env: Record<string, string> = {};
   let started = false;
   try {
+    // An app being deployed counts as accessed, so it is not put to sleep right after going live.
+    await withSystem(db, (tx) => tx.update(apps).set({ lastAccessAt: new Date() }).where(eq(apps.id, appId)));
     env = await getAppEnvForRun(db, rt.envKey, appId);
     await driver.start({ appId, deploymentId, ownerId: d.ownerId, image: imageRef, env: { ...env, PORT: String(CONTAINER_PORT) }, limits: runLimits, port: CONTAINER_PORT });
     started = true;
@@ -164,6 +170,8 @@ export async function rolloutDynamic(db: Db, deploymentId: string, rt?: DynamicR
     if (started) await driver.stopDeployment(appId, deploymentId).catch(() => undefined);
     throw e;
   }
+  };
+  await (rt.lock ? rt.lock(appId, body) : body());
 }
 
 /**

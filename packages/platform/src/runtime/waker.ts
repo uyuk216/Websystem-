@@ -11,7 +11,10 @@ export interface WakerOptions {
   driver: RuntimeDriver;
   /** The run spec of the deployment (same one the rollout uses); null if it cannot be run. */
   buildSpec(appId: string, deploymentId: string): Promise<AppRunSpec | null>;
-  /** Cross-process mutual exclusion per app (e.g. a Postgres advisory lock). Defaults to none (single process). */
+  /**
+   * Cross-process mutual exclusion per app (e.g. a Postgres advisory lock on a dedicated pool). Defaults to none
+   * (single process). `fn` only talks to the driver: the run spec is built before the lock is taken.
+   */
   withLock?<T>(appId: string, fn: () => Promise<T>): Promise<T>;
   health?: HealthOptions;
   timeoutMs?: number;
@@ -19,6 +22,8 @@ export interface WakerOptions {
   endpointTtlMs?: number;
   /** How long a failed wake is remembered, so a crash-looping app is not restarted by every request (default 5s). */
   failureTtlMs?: number;
+  /** Wakes running at the same time in this process (default 8); the rest wait in line within their time budget. */
+  maxConcurrentWakes?: number;
 }
 
 /**
@@ -33,11 +38,29 @@ export class Waker {
   private readonly timeoutMs: number;
   private readonly endpointTtlMs: number;
   private readonly failureTtlMs: number;
+  private readonly maxWakes: number;
+  private activeWakes = 0;
+  private readonly queue: Array<() => void> = [];
 
   constructor(private readonly opts: WakerOptions) {
     this.timeoutMs = opts.timeoutMs ?? WAKE_TIMEOUT_MS;
     this.endpointTtlMs = opts.endpointTtlMs ?? 5_000;
     this.failureTtlMs = opts.failureTtlMs ?? 5_000;
+    this.maxWakes = opts.maxConcurrentWakes ?? 8;
+  }
+
+  private async acquire(): Promise<void> {
+    if (this.activeWakes < this.maxWakes) {
+      this.activeWakes++;
+      return;
+    }
+    await new Promise<void>((resolve) => this.queue.push(resolve)); // the slot is handed over, activeWakes unchanged
+  }
+
+  private release(): void {
+    const next = this.queue.shift();
+    if (next) next();
+    else this.activeWakes--;
   }
 
   /** Forget the cached endpoint (e.g. after a connection error: the app was stopped meanwhile). */
@@ -54,7 +77,7 @@ export class Waker {
 
     let p = this.inflight.get(key);
     if (!p) {
-      p = this.wake(appId, deploymentId).then((r) => {
+      p = this.wake(appId, deploymentId, Date.now() + this.timeoutMs).then((r) => {
         if (r.ok) this.good.set(key, { at: Date.now(), host: r.host, port: r.port });
         else if (r.reason !== 'timeout') this.bad.set(key, { at: Date.now(), reason: r.reason });
         if (this.good.size > 5000) this.good.clear();
@@ -79,25 +102,38 @@ export class Waker {
     }
   }
 
-  private async wake(appId: string, deploymentId: string): Promise<WakeResult> {
+  private async wake(appId: string, deploymentId: string, deadline: number): Promise<WakeResult> {
     const { driver } = this.opts;
-    const run = async (): Promise<WakeResult> => {
-      // Another process may have woken the app while we waited for the lock.
+    await this.acquire();
+    try {
+      if (Date.now() >= deadline) return { ok: false, reason: 'timeout' };
       if ((await driver.status(appId, deploymentId)) === 'running') {
         const ep = await driver.endpoint(appId, deploymentId);
         if (ep) return { ok: true, ...ep };
       }
+      // Built before the lock: nothing inside the lock needs a database connection.
       const spec = await this.opts.buildSpec(appId, deploymentId);
-      if (!spec) return { ok: false, reason: 'missing' };
-      await driver.start(spec);
-      const health = await waitHealthy(driver, appId, deploymentId, { ...this.opts.health, timeoutMs: this.opts.health?.timeoutMs ?? this.timeoutMs });
-      if (!health.ok) {
-        await driver.stopDeployment(appId, deploymentId).catch(() => undefined);
-        return { ok: false, reason: health.reason === 'timeout' ? 'timeout' : 'failed' };
-      }
-      const ep = await driver.endpoint(appId, deploymentId);
-      return ep ? { ok: true, ...ep } : { ok: false, reason: 'failed' };
-    };
-    return this.opts.withLock ? this.opts.withLock(appId, run) : run();
+      const run = async (): Promise<WakeResult> => {
+        // Another process may have woken the app while we waited for the lock.
+        if ((await driver.status(appId, deploymentId)) === 'running') {
+          const ep = await driver.endpoint(appId, deploymentId);
+          if (ep) return { ok: true, ...ep };
+        }
+        if (!spec) return { ok: false, reason: 'missing' };
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return { ok: false, reason: 'timeout' };
+        await driver.start(spec);
+        const health = await waitHealthy(driver, appId, deploymentId, { ...this.opts.health, timeoutMs: Math.min(this.opts.health?.timeoutMs ?? remaining, Math.max(1, deadline - Date.now())) });
+        if (!health.ok) {
+          await driver.stopDeployment(appId, deploymentId).catch(() => undefined);
+          return { ok: false, reason: health.reason === 'timeout' ? 'timeout' : 'failed' };
+        }
+        const ep = await driver.endpoint(appId, deploymentId);
+        return ep ? { ok: true, ...ep } : { ok: false, reason: 'failed' };
+      };
+      return await (this.opts.withLock ? this.opts.withLock(appId, run) : run());
+    } finally {
+      this.release();
+    }
   }
 }

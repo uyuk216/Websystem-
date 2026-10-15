@@ -18,6 +18,8 @@ export interface ProxyOptions {
   connectTimeoutMs?: number;
   idleTimeoutMs?: number;
   maxBodyBytes?: number;
+  /** Aborted when the client goes away: the upstream request is dropped. */
+  signal?: AbortSignal;
   /** Called with every byte of the response (or upgraded stream) that is sent to the client. */
   onBytes: (n: number) => void;
 }
@@ -52,8 +54,9 @@ export function forwardHeaders(req: IncomingHttpHeaders, remoteAddress: string |
   out['x-forwarded-proto'] = proto;
   out['x-forwarded-host'] = host;
   if (upgrade) {
+    // Only WebSocket is tunnelled (callers check); anything else is never forwarded as an upgrade.
     out.connection = 'Upgrade';
-    out.upgrade = String(req.upgrade ?? 'websocket');
+    out.upgrade = 'websocket';
   } else {
     out.connection = 'close';
   }
@@ -110,6 +113,8 @@ export function proxyRequest(
     guardConnect(upstream, opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS, fail);
     upstream.setTimeout(opts.idleTimeoutMs ?? IDLE_TIMEOUT_MS, () => fail('timeout'));
     upstream.on('error', () => fail('upstream'));
+    if (opts.signal?.aborted) return fail('upstream');
+    opts.signal?.addEventListener('abort', () => fail('upstream'), { once: true });
     upstream.on('response', (res) => {
       if (done) return res.destroy();
       done = true;

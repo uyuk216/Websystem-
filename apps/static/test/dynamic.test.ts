@@ -9,22 +9,28 @@ import { withTestDb, type TestDb } from '../../api/test/helpers/db.js';
 import { accounts, apps, deployments } from '../../api/src/db/schema.js';
 import { ensureAccountOwner } from '../../api/src/teams/teams.js';
 import { createApp } from '../../api/src/apps/apps.js';
-import { sleepIdleApps, withWakeLock } from '../../api/src/apps/wake.js';
+import { sleepIdleApps } from '../../api/src/apps/wake.js';
+import { rolloutDynamic, buildRunSpec, type DynamicRuntime } from '../../api/src/ingest/dynamic.js';
+import { closeLockers, openLocker } from '../../api/test/helpers/lockdb.js';
+import { randomBytes } from 'node:crypto';
+import { connect } from 'node:net';
 import { createTransferMeter } from '../../api/src/usage/transfer.js';
 import { createStaticApp } from '../src/app.js';
 
 const closers: Array<() => void> = [];
-afterEach(() => { for (const c of closers.splice(0)) c(); });
+afterEach(async () => { for (const c of closers.splice(0)) c(); await closeLockers(); });
 
 /** A driver whose "container" is an in-process HTTP server that appears `bootMs` after start(). */
 function fakeDriver(backend: () => Server, opts: { bootMs?: number; neverHealthy?: boolean } = {}) {
   let server: Server | null = null;
   let port = 0;
-  const state = { starts: 0, stops: 0, specs: [] as AppRunSpec[] };
+  const state = { starts: 0, stops: 0, specs: [] as AppRunSpec[], stoppedDeployments: [] as string[] };
+  let depId = '';
   const driver: RuntimeDriver = {
     async start(spec) {
       state.starts++;
       state.specs.push(spec);
+      depId = spec.deploymentId;
       await new Promise((r) => setTimeout(r, 20));
       if (!server) {
         const s = backend();
@@ -37,8 +43,12 @@ function fakeDriver(backend: () => Server, opts: { bootMs?: number; neverHealthy
       return { appId: spec.appId, deploymentId: spec.deploymentId, containerId: 'c' };
     },
     async stop() { state.stops++; server?.closeAllConnections(); server?.close(); server = null; },
-    async stopDeployment() { await driver.stop(''); },
-    async status(): Promise<RuntimeStatus> { return server ? 'running' : 'stopped'; },
+    async stopDeployment(_a, d) {
+      state.stoppedDeployments.push(d);
+      if (d !== depId) return;
+      server?.closeAllConnections(); server?.close(); server = null;
+    },
+    async status(_a, d): Promise<RuntimeStatus> { return server && (!d || d === depId) ? 'running' : 'stopped'; },
     async endpoint() { return server ? { host: '127.0.0.1', port } : null; },
     async logs() { return []; },
     async runningCount() { return server ? [{ appId: runningApp, containers: 1 }] : []; },
@@ -67,18 +77,18 @@ const echoBackend = () => createServer((req, res) => {
   });
 });
 
-async function edge(db: TestDb, fd: ReturnType<typeof fakeDriver>, o: { limit?: number; timeoutMs?: number; withLock?: boolean } = {}) {
+async function edge(db: TestDb, fd: ReturnType<typeof fakeDriver>, o: { limit?: number; timeoutMs?: number; withLock?: boolean; touchMs?: number } = {}) {
   const meter = createTransferMeter({ db, limitBytes: o.limit ?? 10_000_000, limitCacheMs: 0 });
   const waker = new Waker({
     driver: fd.driver,
     buildSpec: async (appId, deploymentId) => ({ appId, deploymentId, ownerId: '00000000-0000-4000-8000-000000000000', image: 'img', env: {}, limits: { memoryMb: 1, cpu: 1, pids: 1 }, port: 8080 }),
     health: { intervalMs: 20, timeoutMs: o.timeoutMs ?? 5000 },
     timeoutMs: o.timeoutMs ?? 5000,
-    ...(o.withLock ? { withLock: (id: string, fn: () => Promise<never>) => withWakeLock(db, id, fn) } : {}),
+    ...(o.withLock ? { withLock: (await openLocker(db)).lock } : {}),
   });
   const touches: string[] = [];
   const app = createStaticApp({ db, storage: { get: async () => null }, meter, baseDomain: 'localhost', siteCacheMs: 0,
-    dynamic: { waker, touch: async (id) => { touches.push(id); }, touchIntervalMs: 60_000 } });
+    dynamic: { waker, touch: async (id) => { touches.push(id); }, touchIntervalMs: o.touchMs ?? 60_000 } });
   const server = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' });
   server.on('upgrade', (req, socket, head) => app.handleUpgrade(req, socket, head));
   await new Promise((r) => setTimeout(r, 20));
@@ -241,6 +251,8 @@ describe('sleep', () => {
     await db.update(apps).set({ lastAccessAt: new Date(now.getTime() - 16 * 60_000) }).where(eq(apps.id, s.appId));
     expect(await sleepIdleApps(db, fd.driver, now)).toEqual([s.appId]);
     expect(fd.isUp()).toBe(false);
+    expect(fd.state.stoppedDeployments).toEqual([s.deploymentId]); // only the active deployment, never stop-all
+    expect(fd.state.stops).toBe(0);
     await new Promise((r) => setTimeout(r, 5100)); // the waker's endpoint cache expires
     expect((await fetch(`${e.base}/`, { headers: H })).status).toBe(200);
     expect(fd.state.starts).toBe(2);
@@ -268,4 +280,150 @@ describe('sleep', () => {
     expect(fd.isUp()).toBe(true);
     expect(await sleepIdleApps(db, fd.driver, new Date())).toEqual([s.appId]);
   }));
+});
+
+describe('fix round 1', () => {
+  it('a client reset while the app is still starting does not crash the process and never reaches the app', () => withTestDb(async (db) => {
+    await dynamicApp(db);
+    let upgrades = 0;
+    const fd = fakeDriver(() => {
+      const s = createServer((_q, r) => r.end('ok'));
+      s.on('upgrade', (_q, sock: Socket) => { upgrades++; sock.destroy(); });
+      return s;
+    }, { bootMs: 300 });
+    const e = await edge(db, fd, { withLock: true });
+    const uncaught: unknown[] = [];
+    const onUncaught = (err: unknown) => uncaught.push(err);
+    process.on('uncaughtException', onUncaught);
+    try {
+      const port = Number(new URL(e.base).port);
+      const sock = connect(port, '127.0.0.1');
+      await new Promise((r) => sock.once('connect', r));
+      sock.write('GET /ws HTTP/1.1\r\nHost: dyn-app.localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: x\r\nSec-WebSocket-Version: 13\r\n\r\n');
+      await new Promise((r) => setTimeout(r, 80));
+      sock.resetAndDestroy();
+      await new Promise((r) => setTimeout(r, 700));
+      expect(uncaught).toEqual([]);
+      expect(upgrades).toBe(0);
+      expect((await fetch(`${e.base}/`, { headers: H })).status).toBe(200);
+    } finally { process.off('uncaughtException', onUncaught); }
+  }));
+
+  it('does not proxy a request whose client left during the wake', () => withTestDb(async (db) => {
+    await dynamicApp(db);
+    const seen: string[] = [];
+    const fd = fakeDriver(() => createServer((q, r) => { seen.push(q.url ?? ''); r.end('ok'); }), { bootMs: 300 });
+    const e = await edge(db, fd);
+    await new Promise<void>((resolve) => {
+      const req = httpRequest(`${e.base}/gone`, { headers: H });
+      req.on('error', () => undefined);
+      req.end();
+      setTimeout(() => { req.destroy(); resolve(); }, 60);
+    });
+    await new Promise((r) => setTimeout(r, 800));
+    expect(seen).not.toContain('/gone');
+    expect((await fetch(`${e.base}/after`, { headers: H })).status).toBe(200);
+    expect(seen).toContain('/after');
+  }));
+
+  it('only tunnels websocket upgrades', () => withTestDb(async (db) => {
+    await dynamicApp(db);
+    const fd = fakeDriver(echoBackend);
+    const e = await edge(db, fd);
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = httpRequest(`${e.base}/`, { headers: { ...H, connection: 'Upgrade', upgrade: 'h2c' } });
+      req.on('response', (r) => { resolve(r.statusCode ?? 0); r.resume(); });
+      req.on('upgrade', () => reject(new Error('upgraded')));
+      req.on('error', reject);
+      req.end();
+    });
+    expect(status).toBe(400);
+    expect(fd.state.starts).toBe(0);
+  }));
+
+  it('a long streaming response (SSE) keeps refreshing last access', () => withTestDb(async (db) => {
+    await dynamicApp(db);
+    const fd = fakeDriver(() => createServer((q, r) => {
+      if (q.url !== '/sse') return r.end('ok');
+      r.writeHead(200, { 'content-type': 'text/event-stream' });
+      let i = 0;
+      const t = setInterval(() => { r.write(`data: ${i}\n\n`); if (++i === 8) { clearInterval(t); r.end(); } }, 60);
+    }));
+    const e = await edge(db, fd, { touchMs: 100 });
+    expect((await (await fetch(`${e.base}/sse`, { headers: H })).text()).split('\n\n').length).toBeGreaterThan(5);
+    expect(e.touches.length).toBeGreaterThanOrEqual(3);
+  }));
+
+  it('12 different sleeping apps wake at once without exhausting the connection pool', () => withTestDb(async (db) => {
+    const names = Array.from({ length: 12 }, (_, i) => `multi-${i}`);
+    const created = [] as Array<{ appId: string; deploymentId: string }>;
+    for (const n of names) created.push(await dynamicApp(db, n));
+    // One "container" per app.
+    const servers = new Map<string, { server: Server; port: number }>();
+    const starts: string[] = [];
+    const driver: RuntimeDriver = {
+      async start(spec) {
+        starts.push(spec.appId);
+        await new Promise((r) => setTimeout(r, 250));
+        if (!servers.has(spec.appId)) {
+          const server = createServer((_q, r) => r.end(spec.appId));
+          await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+          servers.set(spec.appId, { server, port: (server.address() as AddressInfo).port });
+          closers.push(() => server.close());
+        }
+        return { appId: spec.appId, deploymentId: spec.deploymentId, containerId: 'c' };
+      },
+      async stop() {}, async stopDeployment() {},
+      async status(a) { return servers.has(a) ? 'running' : 'stopped'; },
+      async endpoint(a) { const s = servers.get(a); return s ? { host: '127.0.0.1', port: s.port } : null; },
+      async logs() { return []; }, async runningCount() { return []; },
+    };
+    const rt: DynamicRuntime = { driver, envKey: randomBytes(32) };
+    const locker = await openLocker(db, 4);
+    const waker = new Waker({
+      driver, buildSpec: (a, d) => buildRunSpec(db, rt, a, d), withLock: locker.lock,
+      health: { intervalMs: 20, timeoutMs: 10_000 }, timeoutMs: 10_000, maxConcurrentWakes: 8,
+    });
+    const meter = createTransferMeter({ db, limitBytes: 1e9, limitCacheMs: 0 });
+    const app = createStaticApp({ db, storage: { get: async () => null }, meter, baseDomain: 'localhost', siteCacheMs: 0, dynamic: { waker, touch: async () => undefined } });
+    const server = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' });
+    closers.push(() => { (server as unknown as Server).closeAllConnections(); (server as unknown as Server).close(); });
+    await new Promise((r) => setTimeout(r, 20));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const started = Date.now();
+    const all = Promise.all(names.map((n) => fetch(`${base}/`, { headers: { host: `${n}.localhost` } })));
+    await new Promise((r) => setTimeout(r, 100));
+    // The main pool (one connection here) is still usable while wakes are in progress.
+    const t0 = Date.now();
+    await db.execute(sql`select 1`);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    const rs = await all;
+    expect(rs.map((r) => r.status)).toEqual(Array(12).fill(200));
+    expect(await Promise.all(rs.map((r) => r.text()))).toEqual(created.map((c) => c.appId));
+    expect(starts.length).toBe(12);
+    expect(Date.now() - started).toBeLessThan(8000);
+  }), 30_000);
+});
+
+describe('sleeper versus rollout', () => {
+  it('a rollout holds the wake lock: an idle-looking app being rolled out is not stopped, and last access is refreshed first', () => withTestDb(async (db) => {
+    const s = await dynamicApp(db);
+    await db.update(apps).set({ lastAccessAt: new Date(0) }).where(eq(apps.id, s.appId));
+    const [nd] = await db.insert(deployments).values({ appId: s.appId, source: 'upload', status: 'processing', sourceKey: 's2', imageRef: `ys/${s.appId}:new` }).returning();
+    const fd = fakeDriver(echoBackend, { bootMs: 400 });
+    fd.setApp(s.appId);
+    const locker = await openLocker(db, 2);
+    const rt: DynamicRuntime = { driver: fd.driver, envKey: randomBytes(32), health: { intervalMs: 20, timeoutMs: 5000 }, lock: locker.lock };
+    const rolling = rolloutDynamic(db, nd!.id, rt);
+    await new Promise((r) => setTimeout(r, 150)); // start() is in flight, lock held
+    const [row] = await db.select({ at: apps.lastAccessAt }).from(apps).where(eq(apps.id, s.appId));
+    expect(row!.at!.getTime()).toBeGreaterThan(Date.now() - 60_000); // touched before start
+    await db.update(apps).set({ lastAccessAt: new Date(0) }).where(eq(apps.id, s.appId));
+    expect(await sleepIdleApps(db, fd.driver, new Date())).toEqual([]); // lock held by the rollout
+    await rolling;
+    expect(fd.isUp()).toBe(true);
+    const [after] = await db.select({ active: apps.activeDeploymentId }).from(apps).where(eq(apps.id, s.appId));
+    expect(after!.active).toBe(nd!.id);
+    expect(fd.state.stops).toBe(0);
+  }), 30_000);
 });

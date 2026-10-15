@@ -127,41 +127,56 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
     if (await deps.meter.isBlocked(site.appId)) return limitPage(c);
     if (!deps.dynamic) return startFailed(c);
     touch(site.appId);
-    const woke = await deps.dynamic.waker.ensure(site.appId, site.deploymentId);
-    if (!woke.ok) return startFailed(c);
+    // A client that leaves while the app is starting must not make the edge connect to the app afterwards.
+    const abort = new AbortController();
+    const onGone = () => abort.abort();
+    incoming.socket.once('close', onGone);
     try {
+      const woke = await deps.dynamic.waker.ensure(site.appId, site.deploymentId);
+      if (abort.signal.aborted) return new Response(null, { status: 499 });
+      if (!woke.ok) return startFailed(c);
       // The target is always the driver's endpoint, never anything derived from the request.
       const r = await proxyRequest(incoming, { host: woke.host, port: woke.port }, {
-        proto, onBytes: (n) => deps.meter.record(site.appId, n),
+        proto, signal: abort.signal, onBytes: (n) => { deps.meter.record(site.appId, n); touch(site.appId); },
       });
       return new Response(r.body, { status: r.status, headers: r.headers });
     } catch (e) {
       const why = e as ProxyFailure;
+      if (abort.signal.aborted) return new Response(null, { status: 499 });
       if (why === 'too_large') return c.text('Payload Too Large', 413, { Connection: 'close' });
       if (why === 'timeout') return c.text('Gateway Timeout', 504);
       deps.dynamic.waker.invalidate(site.appId);
       return c.text('Bad Gateway', 502);
+    } finally {
+      incoming.socket.off('close', onGone);
     }
   }
 
   function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-    const reply = (status: string) => { socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); };
+    // First thing, before any await: a client reset while the app is starting must not be an uncaught 'error'.
+    let closed = false;
+    let keepAlive: NodeJS.Timeout | undefined;
+    const cleanup = () => { closed = true; clearInterval(keepAlive); };
+    socket.on('error', cleanup);
+    socket.on('close', cleanup);
+    const reply = (status: string) => { if (!closed) socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); };
     void (async () => {
+      if (String(req.headers.upgrade ?? '').toLowerCase() !== 'websocket') return reply('400 Bad Request');
       const name = resolveSite(req.headers.host ?? '', deps.baseDomain);
       const site = name ? await lookup(name) : null;
+      if (closed) return;
       if (!site || site.kind !== 'dynamic') return reply('404 Not Found');
       if (await deps.meter.isBlocked(site.appId)) return reply('503 Service Unavailable');
       if (!deps.dynamic) return reply('503 Service Unavailable');
       touch(site.appId);
       const woke = await deps.dynamic.waker.ensure(site.appId, site.deploymentId);
+      if (closed || socket.destroyed) return; // the client left while the app was starting
       if (!woke.ok) return reply('503 Service Unavailable');
-      // A long-lived connection keeps the app awake.
-      const keepAlive = setInterval(() => touch(site.appId), 30_000);
-      socket.once('close', () => clearInterval(keepAlive));
+      // A long-lived connection keeps the app awake; cleared when the socket closes.
+      keepAlive = setInterval(() => touch(site.appId), 30_000);
       try {
         await proxyUpgrade(req, socket, head, { host: woke.host, port: woke.port }, { proto, onBytes: (n) => deps.meter.record(site.appId, n) });
       } catch (e) {
-        clearInterval(keepAlive);
         if (e !== 'timeout') deps.dynamic.waker.invalidate(site.appId);
         reply(e === 'timeout' ? '504 Gateway Timeout' : '502 Bad Gateway');
       }

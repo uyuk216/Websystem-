@@ -2,7 +2,7 @@ import { createQueue, createStorage, loadStorageConfig, startQueue } from 'platf
 import { createDb } from 'api/db';
 import { sweepStaleDeployments } from 'api/publish';
 import { createDynamicRuntime } from 'api/dynamic';
-import { sleepIdleApps } from 'api/wake';
+import { createWakeLocker, sleepIdleApps } from 'api/wake';
 import { defaultHandlers, registerHandlers } from './worker.js';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -10,6 +10,8 @@ if (!databaseUrl) throw new Error('Missing required env var: DATABASE_URL');
 
 // Throws with a clear message when the dynamic runtime is enabled but APP_ENV_KEY is missing.
 const runtime = createDynamicRuntime(process.env);
+const locker = runtime ? createWakeLocker(databaseUrl, 4) : undefined;
+if (runtime && locker) runtime.lock = locker.lock;
 const storage = createStorage(loadStorageConfig(process.env));
 await storage.ensureBuckets();
 const boss = await startQueue(createQueue(databaseUrl));
@@ -34,6 +36,7 @@ console.log('worker: waiting for jobs');
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
     void boss.stop({ graceful: true }).finally(() => {
+      void locker?.close();
       storage.close();
       void sql.end();
       process.exit(0);

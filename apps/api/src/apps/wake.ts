@@ -1,7 +1,7 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { RuntimeDriver } from 'platform';
 import { DYNAMIC_LIMITS } from 'shared';
-import { withSystem, type Db } from '../db/client.js';
+import { createDb, withSystem, type Db } from '../db/client.js';
 import { apps, deployments } from '../db/schema.js';
 
 export type LiveApp =
@@ -35,7 +35,18 @@ export async function withWakeLock<T>(db: Db, appId: string, fn: () => Promise<T
 }
 
 /**
- * Stops dynamic apps that have not been accessed for `sleepAfterMinutes`. Per app, takes the wake lock without
+ * Wake locks on their own small connection pool. The lock transaction is held while an app starts (up to 30s),
+ * so it must never share a pool with the queries made inside it (lookups, run spec, switch): `fn` must not use
+ * the main pool's connections for anything that the lock holder waits on, and the main pool must not be able
+ * to run dry because wakes are in progress.
+ */
+export function createWakeLocker(url: string, max = 8): { lock: <T>(appId: string, fn: () => Promise<T>) => Promise<T>; close: () => Promise<void> } {
+  const { db, sql } = createDb(url, { max });
+  return { lock: (appId, fn) => withWakeLock(db, appId, fn), close: () => sql.end() };
+}
+
+/**
+ * Stops dynamic apps that have not been accessed for `sleepAfterMinutes`. Per app, takes the wake lock (also held by rollouts) without
  * waiting (an app being woken is skipped) and re-checks the idle time under it. Returns the stopped app ids.
  */
 export async function sleepIdleApps(db: Db, driver: RuntimeDriver, now: Date = new Date(), idleMinutes: number = DYNAMIC_LIMITS.sleepAfterMinutes): Promise<string[]> {
@@ -43,10 +54,10 @@ export async function sleepIdleApps(db: Db, driver: RuntimeDriver, now: Date = n
   if (running.length === 0) return [];
   const cutoff = new Date(now.getTime() - idleMinutes * 60_000);
   const idle = (cond: ReturnType<typeof sql>) => sql`${apps.kind} = 'dynamic' AND ${cond}`;
-  const candidates = await withSystem(db, (tx) => tx.select({ id: apps.id }).from(apps)
+  const candidates = await withSystem(db, (tx) => tx.select({ id: apps.id, active: apps.activeDeploymentId }).from(apps)
     .where(and(inArray(apps.id, running), idle(sql`(${apps.lastAccessAt} IS NULL OR ${apps.lastAccessAt} < ${cutoff.toISOString()}::timestamptz)`))));
   const stopped: string[] = [];
-  for (const { id } of candidates) {
+  for (const { id, active } of candidates) {
     try {
       const did = await withSystem(db, async (tx) => {
         const [lock] = await tx.execute<{ ok: boolean }>(sql`SELECT pg_try_advisory_xact_lock(hashtextextended(${`wake:${id}`}, 0)) AS ok`);
@@ -54,7 +65,8 @@ export async function sleepIdleApps(db: Db, driver: RuntimeDriver, now: Date = n
         const [row] = await tx.select({ id: apps.id }).from(apps)
           .where(and(eq(apps.id, id), idle(sql`(${apps.lastAccessAt} IS NULL OR ${apps.lastAccessAt} < ${cutoff.toISOString()}::timestamptz)`)));
         if (!row) return false;
-        await driver.stop(id);
+        // Only the active deployment's container: one that a rollout is bringing up must not be touched.
+        if (active) await driver.stopDeployment(id, active);
         return true;
       });
       if (did) stopped.push(id);
