@@ -96,8 +96,9 @@ export async function approveRecovery(
   });
 
   const loc = locale === 'en' ? 'en' : 'ja';
+  const to = decryptEmail(emailEnc, cfg.emailEncKey);
   try {
-    await mailer.sendMail(decryptEmail(emailEnc, cfg.emailEncKey), t(loc, 'recovery.approvedSubject'), t(loc, 'recovery.approvedBody'));
+    await mailer.sendMail(to, t(loc, 'recovery.approvedSubject'), t(loc, 'recovery.approvedBody'));
   } catch (err) {
     console.error('recovery: failed to notify user', requestId, err);
     return { newRecoveryCode, mailFailed: true };

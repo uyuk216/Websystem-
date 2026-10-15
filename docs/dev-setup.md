@@ -49,3 +49,12 @@ pnpm doctor              # ツールの確認だけ行う
 
 MinIO のイメージは Docker Hub での配布が終わったため `quay.io/minio/minio` を使います。
 取得できない環境では `MINIO_IMAGE=<イメージ名> pnpm dev:up` で差し替えられます。
+
+## TRUSTED_PROXY_HOPS
+
+API の IP 単位のレート制限が使うクライアント IP の決め方を指定します。
+
+- `0`（既定）：ソケットの接続元アドレスを使い、`X-Forwarded-For` は無視します（開発時・直接公開時）。
+- `N`（1 以上）：`X-Forwarded-For` の右から N 番目の値を使います（信頼できるプロキシが N 段ある場合）。
+
+本番で Cloudflare / Traefik などのプロキシの背後に置く場合は必ず段数を設定してください。0 のままだと全クライアントがプロキシの IP を共有し、IP 単位の制限が事実上全体で 1 つの制限になります。

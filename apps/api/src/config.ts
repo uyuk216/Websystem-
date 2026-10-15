@@ -30,7 +30,7 @@ function parsePort(raw: string | undefined): number {
   return n;
 }
 
-function parseHops(raw: string | undefined): number {
+export function parseHops(raw: string | undefined): number {
   if (raw === undefined || raw === '') return 0;
   if (!/^\d+$/.test(raw) || Number(raw) > 10) throw new Error('TRUSTED_PROXY_HOPS must be an integer 0-10');
   return Number(raw);
