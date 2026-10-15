@@ -50,6 +50,13 @@
       "when": 1792065861004,
       "tag": "0006_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792067595731,
+      "tag": "0007_faulty_lila_cheney",
+      "breakpoints": true
     }
   ]
 }

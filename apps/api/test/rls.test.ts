@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { assertOwnerBypassesRls, withAccount, withSystem } from '../src/db/client.js';
-import { accounts, loginEvents, passkeys, sessions, teamInvites, teamMembers, teams } from '../src/db/schema.js';
+import { accounts, emailChallenges, loginEvents, owners, passkeys, sessions, teamInvites, teamMembers, teams } from '../src/db/schema.js';
 
 const acct = (h: string) => ({ emailHash: h, emailEnc: 'e', displayName: h, locale: 'ja', adultFrom: '2030-01' });
 
@@ -86,6 +86,59 @@ describe('row level security', () => {
       const o = await db.execute<{ tableowner: string }>(sql`select tableowner from pg_tables where tablename = 'sessions'`);
       expect(o[0]!.tableowner).not.toBe('platform_api');
       expect(await withSystem(db, (tx) => tx.select().from(sessions))).toHaveLength(2);
+    }));
+});
+
+describe('row level security: accounts, owners and pre-auth tables', () => {
+  it('hides other accounts rows and blocks writes to them', () =>
+    withTestDb(async (db) => {
+      const { a, b } = await seed(db);
+      await withAccount(db, a.id, async (tx) => {
+        const rows = await tx.select({ id: accounts.id }).from(accounts);
+        expect(rows).toEqual([{ id: a.id }]);
+        expect(await tx.select().from(accounts).where(eq(accounts.id, b.id))).toHaveLength(0);
+        expect(await tx.update(accounts).set({ displayName: 'x' }).where(eq(accounts.id, b.id)).returning()).toHaveLength(0);
+      });
+      await expect(withAccount(db, a.id, (tx) => tx.insert(accounts).values(acct('c')))).rejects.toThrow();
+    }));
+
+  it('shows teammates (read-only) to fellow team members', () =>
+    withTestDb(async (db) => {
+      const { a, b, teamOfA } = await seed(db);
+      await db.insert(teamMembers).values({ teamId: teamOfA, accountId: b.id, role: 'member' });
+      await withAccount(db, a.id, async (tx) => {
+        expect(await tx.select({ id: accounts.id }).from(accounts)).toHaveLength(2);
+        expect(await tx.update(accounts).set({ displayName: 'x' }).where(eq(accounts.id, b.id)).returning()).toHaveLength(0);
+      });
+    }));
+
+  it('scopes owners to own account and own teams', () =>
+    withTestDb(async (db) => {
+      const { a, b, teamOfA, teamOfBOnly } = await seed(db);
+      await db.insert(owners).values([
+        { kind: 'account', accountId: a.id }, { kind: 'account', accountId: b.id },
+        { kind: 'team', teamId: teamOfA }, { kind: 'team', teamId: teamOfBOnly },
+      ]);
+      await withAccount(db, a.id, async (tx) => {
+        const rows = await tx.select().from(owners);
+        expect(rows).toHaveLength(2);
+        expect(rows.some((r) => r.accountId === b.id || r.teamId === teamOfBOnly)).toBe(false);
+      });
+      await expect(withAccount(db, a.id, (tx) => tx.insert(owners).values({ kind: 'account', accountId: b.id }))).rejects.toThrow();
+    }));
+
+  it('platform_api has no access to pre-auth tables', () =>
+    withTestDb(async (db) => {
+      await seed(db);
+      for (const table of ['email_challenges', 'recovery_requests', 'recovery_attempts', 'webauthn_challenges']) {
+        const err = await db.transaction(async (tx) => {
+          await tx.execute(sql`set local role platform_api`);
+          await tx.execute(sql.raw(`select * from ${table}`));
+        }).then(() => null, (e: unknown) => e as Error & { cause?: Error });
+        expect(err, table).not.toBeNull();
+        expect(`${err!.message} ${err!.cause?.message ?? ''}`, table).toMatch(/permission denied/);
+      }
+      await expect(withAccount(db, (await db.select().from(accounts))[0]!.id, (tx) => tx.select().from(emailChallenges))).rejects.toThrow();
     }));
 });
 

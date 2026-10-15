@@ -46,6 +46,8 @@ export const emailChallenges = pgTable('email_challenges', {
   scanToken: text('scan_token'),
   approvedAt: timestamp('approved_at', { withTimezone: true }),
   requesterDeviceLabel: text('requester_device_label'),
+  /** SHA-256 hex of the `did` of the device that opened the mailed link; only that device may confirm the number. */
+  openerDeviceKey: text('opener_device_key'),
 });
 
 export const passkeys = pgTable('passkeys', {

@@ -44,7 +44,7 @@ export async function requestRecovery(
   const emailHash = hashEmail(normalizeEmail(input.email), cfg.emailHashKey);
 
   // Atomically count + record this attempt (advisory lock per email hash) so concurrent calls cannot exceed the limit.
-  const allowed = await db.transaction(async (tx) => {
+  const allowed = await withSystem(db, async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${'recovery:' + emailHash}))`);
     const [row] = await tx
       .select({ n: sql<number>`count(*)::int` })
@@ -56,12 +56,12 @@ export async function requestRecovery(
   });
   if (!allowed) return { error: 'rate_limited' };
 
-  const [account] = await db.select({ id: accounts.id, recoveryCodeHash: accounts.recoveryCodeHash }).from(accounts).where(eq(accounts.emailHash, emailHash));
+  const [account] = await withSystem(db, (tx) => tx.select({ id: accounts.id, recoveryCodeHash: accounts.recoveryCodeHash }).from(accounts).where(eq(accounts.emailHash, emailHash)));
   const target = account?.recoveryCodeHash ?? (await (dummyHash ??= hashRecoveryCode('dummy-recovery-code')));
   const ok = await verifyRecoveryCode(input.recoveryCode, target);
   if (!account || !account.recoveryCodeHash || !ok) return { error: 'invalid' };
 
-  const [req] = await db.insert(recoveryRequests).values({ accountId: account.id }).returning({ id: recoveryRequests.id });
+  const [req] = await withSystem(db, (tx) => tx.insert(recoveryRequests).values({ accountId: account.id }).returning({ id: recoveryRequests.id }));
   const requestId = req!.id;
   try {
     await mailer.sendMail(cfg.adminEmail, t('ja', 'recovery.adminSubject') + ' / ' + t('en', 'recovery.adminSubject'),
@@ -83,11 +83,11 @@ export async function approveRecovery(
   const now = new Date();
 
   // Decrypt before changing anything: a failure here must leave all state untouched.
-  const [target] = await db
+  const [target] = await withSystem(db, (tx) => tx
     .select({ emailEnc: accounts.emailEnc, locale: accounts.locale })
     .from(recoveryRequests)
     .innerJoin(accounts, eq(accounts.id, recoveryRequests.accountId))
-    .where(and(eq(recoveryRequests.id, requestId), eq(recoveryRequests.status, 'pending')));
+    .where(and(eq(recoveryRequests.id, requestId), eq(recoveryRequests.status, 'pending'))));
   if (!target) throw new Error('recovery request not found or already decided');
   const to = decryptEmail(target.emailEnc, cfg.emailEncKey);
   const loc = target.locale === 'en' ? 'en' : 'ja';

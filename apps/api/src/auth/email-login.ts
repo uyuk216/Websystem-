@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { and, eq, gt, sql } from 'drizzle-orm';
 import { t, type Locale } from 'i18n';
-import type { Db } from '../db/client.js';
+import { withSystem, type Db } from '../db/client.js';
 import { accounts, emailChallenges } from '../db/schema.js';
 import { hashEmail, normalizeEmail } from '../crypto/email.js';
 import type { Mailer } from '../mail/mailer.js';
@@ -37,9 +37,10 @@ export async function startEmailChallenge(
   const code = newCode();
   const token = randomBytes(32).toString('base64url');
 
-  const [account] = await db.select({ id: accounts.id }).from(accounts).where(eq(accounts.emailHash, emailHash));
+  // Pre-authentication: nothing identifies the account yet.
+  const [account] = await withSystem(db, (tx) => tx.select({ id: accounts.id }).from(accounts).where(eq(accounts.emailHash, emailHash)));
   // Rows live exactly TTL, so "expires in the future" == "started within the last 10 minutes".
-  const challengeId = await db.transaction(async (tx) => {
+  const challengeId = await withSystem(db, async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${'challenge:' + emailHash}))`);
     const [row] = await tx
       .select({ n: sql<number>`count(*)::int` })
@@ -107,7 +108,7 @@ export async function verifyEmailCode(
   requesterDeviceId: string,
 ): Promise<{ accountId: string } | { error: 'invalid' | 'expired' | 'locked' }> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(challengeId)) return { error: 'invalid' };
-  return db.transaction(async (tx) => {
+  return withSystem(db, async (tx) => {
     const r = await consumeChallenge(tx, challengeId, code, 'login', requesterDeviceId);
     if ('error' in r) return r;
     return r.accountId ? { accountId: r.accountId } : { error: 'invalid' as const };

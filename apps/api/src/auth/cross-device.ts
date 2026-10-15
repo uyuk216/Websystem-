@@ -1,6 +1,6 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import type { Db } from '../db/client.js';
+import { withSystem, type Db } from '../db/client.js';
 import { emailChallenges } from '../db/schema.js';
 import { hashesEqual, sha256Hex } from './email-login.js';
 
@@ -24,7 +24,7 @@ export async function openEmailLink(
   openerDeviceId: string,
 ): Promise<{ result: 'logged_in'; accountId: string } | { result: 'cross_device_pending' } | { error: 'invalid' | 'expired' }> {
   if (!UUID.test(challengeId)) return { error: 'invalid' };
-  return db.transaction(async (tx) => {
+  return withSystem(db, async (tx) => {
     const c = await lock(tx, challengeId);
     // crossDeviceState set means the link was already opened (or the challenge failed).
     if (!c || c.consumedAt || c.purpose !== 'login' || !c.accountId || c.crossDeviceState !== null) return { error: 'invalid' as const };
@@ -35,7 +35,7 @@ export async function openEmailLink(
       return { result: 'logged_in' as const, accountId: c.accountId };
     }
     await tx.update(emailChallenges)
-      .set({ crossDeviceState: 'awaiting_scan', crossDeviceNumber: randomInt(10, 100) })
+      .set({ crossDeviceState: 'awaiting_scan', crossDeviceNumber: randomInt(10, 100), openerDeviceKey: sha256Hex(openerDeviceId) })
       .where(eq(emailChallenges.id, c.id));
     return { result: 'cross_device_pending' as const };
   });
@@ -53,7 +53,7 @@ export async function getRequesterScreen(
   appOrigin: string,
 ): Promise<{ state: 'awaiting_scan'; qrPayload: string; number: number } | { state: 'approved' } | { state: 'none' }> {
   if (!UUID.test(challengeId)) return { state: 'none' };
-  return db.transaction(async (tx) => {
+  return withSystem(db, async (tx) => {
     const c = await lock(tx, challengeId);
     if (!c || c.consumedAt || c.requesterDeviceId !== requesterDeviceId) return { state: 'none' as const };
     if (c.crossDeviceState !== 'awaiting_scan' && c.crossDeviceState !== 'approved') return { state: 'none' as const };
@@ -83,12 +83,20 @@ const shuffle = <T>(a: T[]): T[] => {
   return a;
 };
 
-/** Validates the scan token of an awaiting challenge; a wrong token or expiry kills the challenge. */
-async function checkScan(tx: Tx, challengeId: string, scanToken: string): Promise<Row | null> {
+/**
+ * Validates the caller of an awaiting challenge: it must be the device that opened the mailed link (never the
+ * requesting device, whose screen shows both QR and number), and must hold the scan token. A wrong token or
+ * expiry kills the challenge; `killOnWrongDevice` also kills it when the device does not match.
+ */
+async function checkScan(tx: Tx, challengeId: string, scanToken: string, deviceId: string, killOnWrongDevice: boolean): Promise<Row | null> {
   const c = await lock(tx, challengeId);
   if (!c || c.consumedAt || c.crossDeviceState !== 'awaiting_scan') return null;
   if (expired(c) || !c.scanToken || !hashesEqual(sha256Hex(c.scanToken), sha256Hex(scanToken))) {
     await fail(tx, c.id);
+    return null;
+  }
+  if (!c.openerDeviceKey || deviceId === c.requesterDeviceId || !hashesEqual(c.openerDeviceKey, sha256Hex(deviceId))) {
+    if (killOnWrongDevice) await fail(tx, c.id);
     return null;
   }
   return c;
@@ -99,10 +107,11 @@ export async function getConfirmChoices(
   db: Db,
   challengeId: string,
   scanToken: string,
+  deviceId: string,
 ): Promise<{ choices: [number, number, number]; requesterDevice: string; region: string | null } | { error: 'invalid' }> {
   if (!UUID.test(challengeId)) return { error: 'invalid' };
-  return db.transaction(async (tx) => {
-    const c = await checkScan(tx, challengeId, scanToken);
+  return withSystem(db, async (tx) => {
+    const c = await checkScan(tx, challengeId, scanToken, deviceId, false);
     if (!c) return { error: 'invalid' as const };
     const set = new Set<number>([c.crossDeviceNumber!]);
     while (set.size < 3) set.add(randomInt(10, 100));
@@ -118,11 +127,12 @@ export async function confirmNumber(
   db: Db,
   challengeId: string,
   scanToken: string,
+  deviceId: string,
   chosen: number,
 ): Promise<{ ok: true } | { error: 'mismatch' | 'invalid' }> {
   if (!UUID.test(challengeId)) return { error: 'invalid' };
-  return db.transaction(async (tx) => {
-    const c = await checkScan(tx, challengeId, scanToken);
+  return withSystem(db, async (tx) => {
+    const c = await checkScan(tx, challengeId, scanToken, deviceId, true);
     if (!c) return { error: 'invalid' as const };
     if (chosen !== c.crossDeviceNumber) {
       await fail(tx, c.id);
@@ -142,7 +152,7 @@ export async function completeCrossDeviceLogin(
   requesterDeviceId: string,
 ): Promise<{ accountId: string } | { error: 'invalid' }> {
   if (!UUID.test(challengeId)) return { error: 'invalid' };
-  return db.transaction(async (tx) => {
+  return withSystem(db, async (tx) => {
     const c = await lock(tx, challengeId);
     if (!c || c.consumedAt || c.crossDeviceState !== 'approved' || !c.accountId) return { error: 'invalid' as const };
     if (c.requesterDeviceId !== requesterDeviceId || expired(c)) return { error: 'invalid' as const };

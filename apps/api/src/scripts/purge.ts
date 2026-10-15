@@ -1,6 +1,7 @@
 import { loadConfig } from '../config.js';
 import { createDb } from '../db/client.js';
 import { purgeWebauthnChallenges } from '../auth/passkeys.js';
+import { purgeExpiredSessions } from '../auth/sessions.js';
 import { purgeOldLoginEvents } from '../auth/login-history.js';
 
 const config = loadConfig(process.env);
@@ -9,6 +10,8 @@ try {
   const now = new Date();
   const n = await purgeOldLoginEvents(db, now);
   const c = await purgeWebauthnChallenges(db, now);
+  const s = await purgeExpiredSessions(db, now);
+  console.log(`Deleted ${s} expired/revoked session(s).`);
   console.log(`Deleted ${c} expired/consumed WebAuthn challenge(s).`);
   console.log(`Deleted ${n} login event(s) older than 30 days.`);
 } finally {

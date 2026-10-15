@@ -48,9 +48,12 @@ async function seatsUsed(tx: Tx, teamId: string, exceptInviteId?: string): Promi
 
 /** The personal owner row for an account (created on signup). Idempotent. */
 export async function ensureAccountOwner(db: Db | Tx, accountId: string): Promise<string> {
-  await db.insert(owners).values({ kind: 'account', accountId }).onConflictDoNothing();
-  const [o] = await db.select({ id: owners.id }).from(owners).where(and(eq(owners.kind, 'account'), eq(owners.accountId, accountId)));
-  return o!.id;
+  // Called during signup, before the account has a session: runs as the owner role.
+  return withSystem(db, async (tx) => {
+    await tx.insert(owners).values({ kind: 'account', accountId }).onConflictDoNothing();
+    const [o] = await tx.select({ id: owners.id }).from(owners).where(and(eq(owners.kind, 'account'), eq(owners.accountId, accountId)));
+    return o!.id;
+  });
 }
 
 export async function createTeam(db: Db, accountId: string, name: string): Promise<{ teamId: string; ownerId: string }> {
@@ -93,9 +96,12 @@ export async function inviteMember(
     if (!(await lockTeam(tx, teamId))) return { error: 'forbidden' as const };
     const role = await roleOf(tx, teamId, byAccountId);
     if (!role || !can(role, 'invite')) return { error: 'forbidden' as const };
-    // A re-invite replaces the previous pending invite for the same address.
-    await tx.delete(teamInvites).where(and(eq(teamInvites.teamId, teamId), eq(teamInvites.emailHash, emailHash), isNull(teamInvites.acceptedAt)));
-    if ((await seatsUsed(tx, teamId)) >= TEAM_MAX_MEMBERS) return { error: 'full' as const };
+    // A re-invite replaces the previous pending invite for the same address; check the cap first so a
+    // refused call keeps the old invite (its own seat is excluded from the count).
+    const old = and(eq(teamInvites.teamId, teamId), eq(teamInvites.emailHash, emailHash), isNull(teamInvites.acceptedAt));
+    const [prev] = await tx.select({ id: teamInvites.id }).from(teamInvites).where(and(old, gt(teamInvites.expiresAt, new Date())));
+    if ((await seatsUsed(tx, teamId, prev?.id)) >= TEAM_MAX_MEMBERS) return { error: 'full' as const };
+    await tx.delete(teamInvites).where(old);
     const [inv] = await tx.insert(teamInvites).values({
       teamId, emailHash, tokenHash: sha256Hex(token), invitedBy: byAccountId, expiresAt: new Date(Date.now() + INVITE_TTL_MS),
     }).returning({ id: teamInvites.id });

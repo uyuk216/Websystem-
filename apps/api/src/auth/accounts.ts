@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import type { Locale } from 'i18n';
 import { checkAge } from 'shared';
-import type { Db } from '../db/client.js';
+import { withSystem, type Db } from '../db/client.js';
 import { accounts, emailChallenges } from '../db/schema.js';
 import { encryptEmail, hashEmail, normalizeEmail } from '../crypto/email.js';
 import { ensureAccountOwner } from '../teams/teams.js';
@@ -31,7 +31,7 @@ export async function registerAccount(
   const recoveryCode = generateRecoveryCode();
   const recoveryCodeHash = await hashRecoveryCode(recoveryCode);
 
-  return db.transaction(async (tx) => {
+  return withSystem(db, async (tx) => {
     const r = await consumeChallenge(tx, input.challengeId, input.code, 'signup', input.requesterDeviceId);
     if ('error' in r) return { error: 'invalid' as const };
     if (r.emailHash !== emailHash) return { error: 'invalid' as const };

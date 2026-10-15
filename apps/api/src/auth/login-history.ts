@@ -70,7 +70,7 @@ export async function recordLogin(db: Db, mailer: Mailer, input: RecordLoginInpu
     return !prior;
   });
   if (!isNew || input.notify === false) return;
-  const [acct] = await db.select({ emailEnc: accounts.emailEnc, locale: accounts.locale }).from(accounts).where(eq(accounts.id, input.accountId));
+  const [acct] = await withAccount(db, input.accountId, (tx) => tx.select({ emailEnc: accounts.emailEnc, locale: accounts.locale }).from(accounts).where(eq(accounts.id, input.accountId)));
   if (!acct) return;
   const locale: Locale = acct.locale === 'en' ? 'en' : 'ja';
   const subject = t(locale, 'login.newDeviceSubject');

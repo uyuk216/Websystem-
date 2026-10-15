@@ -18,27 +18,28 @@ export interface PasskeyConfig {
 const RP_NAME = 'Student PaaS';
 
 async function issue(db: Db, kind: 'register' | 'login', accountId: string | null, challenge: string): Promise<string> {
-  const [row] = await db.insert(webauthnChallenges)
+  // webauthn_challenges is not reachable by platform_api: always the owner role.
+  const [row] = await withSystem(db, (tx) => tx.insert(webauthnChallenges)
     .values({ accountId, kind, challenge, expiresAt: new Date(Date.now() + WEBAUTHN_CHALLENGE_TTL_MS) })
-    .returning({ id: webauthnChallenges.id });
+    .returning({ id: webauthnChallenges.id }));
   return row!.id;
 }
 
 /** One-time consume: atomically marks the challenge used (even if verification later fails). */
 async function consume(db: Db, id: string, kind: 'register' | 'login', accountId: string | null): Promise<string | null> {
   if (!UUID.test(id)) return null;
-  const [row] = await db.update(webauthnChallenges).set({ consumedAt: new Date() }).where(and(
+  const [row] = await withSystem(db, (tx) => tx.update(webauthnChallenges).set({ consumedAt: new Date() }).where(and(
     eq(webauthnChallenges.id, id), eq(webauthnChallenges.kind, kind), isNull(webauthnChallenges.consumedAt),
     gt(webauthnChallenges.expiresAt, new Date()),
     accountId === null ? isNull(webauthnChallenges.accountId) : eq(webauthnChallenges.accountId, accountId),
-  )).returning({ challenge: webauthnChallenges.challenge });
+  )).returning({ challenge: webauthnChallenges.challenge }));
   return row?.challenge ?? null;
 }
 
 export async function startPasskeyRegistration(
   db: Db, accountId: string, cfg: PasskeyConfig,
 ): Promise<{ challengeId: string; options: PublicKeyCredentialCreationOptionsJSON }> {
-  const [acct] = await db.select({ emailEnc: accounts.emailEnc, displayName: accounts.displayName }).from(accounts).where(eq(accounts.id, accountId));
+  const [acct] = await withAccount(db, accountId, (tx) => tx.select({ emailEnc: accounts.emailEnc, displayName: accounts.displayName }).from(accounts).where(eq(accounts.id, accountId)));
   if (!acct) throw new Error('account not found');
   const existing = await withAccount(db, accountId, (tx) => tx.select({ id: passkeys.id, transports: passkeys.transports }).from(passkeys).where(eq(passkeys.accountId, accountId)));
   const options = await generateRegistrationOptions({
@@ -109,8 +110,8 @@ export async function finishPasskeyLogin(
 
 /** Deletes expired or consumed WebAuthn challenges. Returns the number of rows removed. */
 export async function purgeWebauthnChallenges(db: Db, now: Date): Promise<number> {
-  const rows = await db.delete(webauthnChallenges)
+  const rows = await withSystem(db, (tx) => tx.delete(webauthnChallenges)
     .where(or(lt(webauthnChallenges.expiresAt, now), isNotNull(webauthnChallenges.consumedAt)))
-    .returning({ id: webauthnChallenges.id });
+    .returning({ id: webauthnChallenges.id }));
   return rows.length;
 }

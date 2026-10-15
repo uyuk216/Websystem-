@@ -89,6 +89,26 @@ describe('teams', () => {
     });
   });
 
+  it('a refused re-invite (full) keeps the old pending invite; a permitted one replaces it', async () => {
+    await withTestDb(async (db) => {
+      const a = await acct(db, 'a@example.com');
+      const { teamId } = await createTeam(db, a.id, 't');
+      const mail = createFakeMailer();
+      const first = await inviteMember(db, mail, teamId, a.id, 'bob@example.com', cfg);
+      if ('error' in first) throw new Error('invite');
+      // at exactly the cap (own seat included) a re-invite still works and replaces the old one
+      for (let i = 0; i < 8; i++) await join(db, teamId, a.id, `m${i}@example.com`);
+      const again = await inviteMember(db, mail, teamId, a.id, 'bob@example.com', cfg);
+      if ('error' in again) throw new Error('re-invite at cap');
+      expect(await db.select().from(teamInvites).where(eq(teamInvites.id, first.inviteId))).toHaveLength(0);
+      // fill the last seat behind its back: the re-invite is refused and the old invite survives
+      const f = await acct(db, 'f@example.com');
+      await db.insert(teamMembers).values({ teamId, accountId: f.id, role: 'member' });
+      expect(await inviteMember(db, mail, teamId, a.id, 'bob@example.com', cfg)).toEqual({ error: 'full' });
+      expect(await db.select().from(teamInvites).where(eq(teamInvites.id, again.inviteId))).toHaveLength(1);
+    });
+  });
+
   it('member cannot invite; admin can', async () => {
     await withTestDb(async (db) => {
       const a = await acct(db, 'a@example.com');

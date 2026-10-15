@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 import { withTestDb } from './helpers/db.js';
+import { eq } from 'drizzle-orm';
 import { accounts, sessions } from '../src/db/schema.js';
-import { createSession, listSessions, resolveSession, revokeSession } from '../src/auth/sessions.js';
+import { SESSION_ABSOLUTE_DAYS, createSession, listSessions, purgeExpiredSessions, resolveSession, revokeSession } from '../src/auth/sessions.js';
 import { rateLimit, requireSession } from '../src/http/middleware.js';
 
 const acct = (h: string) => ({ emailHash: h, emailEnc: 'e', displayName: 'n', locale: 'ja', adultFrom: '2030-01' });
@@ -27,6 +28,46 @@ describe('sessions', () => {
       vi.setSystemTime(Date.now() + 31 * 86400_000);
       expect(await resolveSession(db, fresh.token)).toBeNull(); // expired
       expect(await resolveSession(db, (await createSession(db, a!.id, 'x')).token)).not.toBeNull();
+    }));
+
+  it('caps a session at created_at + 90 days even when kept active', () =>
+    withTestDb(async (db) => {
+      expect(SESSION_ABSOLUTE_DAYS).toBe(90);
+      const [a] = await db.insert(accounts).values(acct('a')).returning();
+      const { token, sessionId } = await createSession(db, a!.id, 'x');
+      const day = 86400_000;
+      const t0 = Date.now();
+      vi.useFakeTimers({ toFake: ['Date'] });
+      // active every 20 days: the sliding window keeps it alive
+      for (const d of [20, 40, 60, 80]) {
+        vi.setSystemTime(t0 + d * day);
+        expect(await resolveSession(db, token)).not.toBeNull();
+      }
+      vi.setSystemTime(t0 + 89 * day);
+      expect(await resolveSession(db, token)).not.toBeNull();
+      expect(await listSessions(db, a!.id)).toHaveLength(1);
+      vi.setSystemTime(t0 + 91 * day);
+      expect(await resolveSession(db, token)).toBeNull(); // last seen 2 days ago, but past the absolute cap
+      expect(await listSessions(db, a!.id)).toHaveLength(0);
+      expect(sessionId).toBeTruthy();
+    }));
+
+  it('purgeExpiredSessions removes revoked, idle and over-age sessions only', () =>
+    withTestDb(async (db) => {
+      const [a] = await db.insert(accounts).values(acct('a')).returning();
+      const mk = async () => (await createSession(db, a!.id, 'x')).sessionId;
+      const live = await mk();
+      const revoked = await mk();
+      const idle = await mk();
+      const old = await mk();
+      const now = new Date();
+      const ago = (d: number) => new Date(now.getTime() - d * 86400_000);
+      await db.update(sessions).set({ revokedAt: ago(1) }).where(eq(sessions.id, revoked));
+      await db.update(sessions).set({ lastSeenAt: ago(31) }).where(eq(sessions.id, idle));
+      await db.update(sessions).set({ createdAt: ago(91) }).where(eq(sessions.id, old));
+      expect(await purgeExpiredSessions(db, now)).toBe(3);
+      expect((await db.select({ id: sessions.id }).from(sessions)).map((r) => r.id)).toEqual([live]);
+      expect(await purgeExpiredSessions(db, now)).toBe(0);
     }));
 
   it('requireSession reads the sid cookie', () =>

@@ -135,13 +135,13 @@ export function createApp(deps?: AppDeps): Hono {
       const cid = c.req.query('c');
       const s = c.req.query('s');
       if (!str(cid, 64) || !str(s, 200)) return c.json({ error: 'invalid' }, 400);
-      const r = await getConfirmChoices(deps.db, cid, s);
+      const r = await getConfirmChoices(deps.db, cid, s, c.get('deviceId'));
       return 'error' in r ? c.json(r, 400) : c.json(r);
     });
     app.post('/auth/email/confirm', attemptLimit, async (c) => {
       const b = await c.req.json().catch(() => null) as Record<string, unknown> | null;
       if (!str(b?.challengeId, 64) || !str(b.scanToken, 200) || typeof b.chosen !== 'number') return c.json({ error: 'invalid' }, 400);
-      const r = await confirmNumber(deps.db, b.challengeId, b.scanToken, b.chosen);
+      const r = await confirmNumber(deps.db, b.challengeId, b.scanToken, c.get('deviceId'), b.chosen);
       return 'error' in r ? c.json(r, 400) : c.json(r);
     });
     app.post('/auth/email/complete', attemptLimit, async (c) => {
