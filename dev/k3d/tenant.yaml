@@ -1,0 +1,11 @@
+# フェーズ 3 で gVisor をエージェントノードに導入する
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: tenant
+servers: 1
+agents: 1
+ports:
+  - port: 8081:80
+    nodeFilters:
+      - loadbalancer
