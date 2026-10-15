@@ -65,6 +65,10 @@ API の IP 単位のレート制限が使うクライアント IP の決め方�
 
 Migrations 0006/0007 enable and FORCE RLS on accounts, owners, sessions, passkeys, login_events, teams, team_members and team_invites; `platform_api` has no privileges on email_challenges, recovery_requests, recovery_attempts and webauthn_challenges (pre-auth tables, owner role only). The API runs authenticated queries as the NOLOGIN role `platform_api` (via `SET LOCAL ROLE`). Pre-auth flows and admin scripts (`withSystem`) run as the connecting owner role, so in production that role must be a SUPERUSER or have BYPASSRLS, and be allowed to `SET ROLE platform_api` (the migration grants this). The API checks this at startup and refuses to start otherwise.
 
+## Static site server and BASE_DOMAIN
+
+`apps/static` (port `STATIC_PORT`, default 8090) serves `http://<app>.<BASE_DOMAIN>:8090` (dev: `<app>.localhost:8090`). Uploaded sites run arbitrary JavaScript, so `BASE_DOMAIN` must be a registrable domain separate from the one used by `APP_ORIGIN` / `RP_ID`; in production it should be listed on the Public Suffix List so browsers isolate each site's cookies and storage. Session cookies are host-only (no `Domain` attribute; covered by a test), so they are never sent to `*.BASE_DOMAIN`.
+
 ## Housekeeping
 
 `pnpm --filter api admin:purge` deletes expired/revoked sessions (30 days idle, 90 days absolute), old login events and spent WebAuthn challenges.

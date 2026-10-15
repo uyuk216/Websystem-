@@ -1,7 +1,7 @@
 import { and, count, desc, eq } from 'drizzle-orm';
 import { STATIC_LIMITS, can, validateAppName, type TeamRole } from 'shared';
-import { withAccount, type Db, type Tx } from '../db/client.js';
-import { apps, owners, teamMembers } from '../db/schema.js';
+import { withAccount, withSystem, type Db, type Tx } from '../db/client.js';
+import { apps, deployments, owners, teamMembers } from '../db/schema.js';
 import { UUID } from '../auth/cross-device.js';
 
 export type CreateAppError = 'format' | 'reserved' | 'taken' | 'forbidden' | 'limit';
@@ -100,4 +100,13 @@ export async function deleteApp(
     try { await opts.enqueueStorageCleanup?.(appId); } catch (e) { console.error('storage cleanup enqueue failed', appId, e); }
   }
   return r;
+}
+
+/** Read-only lookup for the static server (owner role): the live deployment's site key by app name. */
+export async function findLiveSite(db: Db, name: string): Promise<{ appId: string; siteKey: string } | null> {
+  const [r] = await withSystem(db, (tx) =>
+    tx.select({ appId: apps.id, siteKey: deployments.siteKey }).from(apps)
+      .innerJoin(deployments, and(eq(deployments.id, apps.activeDeploymentId), eq(deployments.appId, apps.id)))
+      .where(eq(apps.name, name)));
+  return r?.siteKey ? { appId: r.appId, siteKey: r.siteKey } : null;
 }

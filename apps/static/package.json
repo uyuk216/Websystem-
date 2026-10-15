@@ -1,0 +1,27 @@
+{
+  "name": "static",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/main.ts",
+    "start": "node --env-file-if-exists=../../.env.development --import tsx src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "api": "workspace:*",
+    "hono": "^4.13.13",
+    "i18n": "workspace:*",
+    "platform": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "drizzle-orm": "^0.45.4",
+    "postgres": "^3.4.9",
+    "tsx": "^4.23.15",
+    "vitest": "^4.1.11"
+  }
+}

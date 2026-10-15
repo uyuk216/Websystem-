@@ -16,6 +16,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { JOBS, type Storage } from 'platform';
 import { STATIC_LIMITS } from 'shared';
 import { createDeployment, listDeployments, rollback, type JobQueue } from '../apps/deployments.js';
+import { getUsage } from '../usage/transfer.js';
 import { createApp as createAppRecord, deleteApp, getApp, listApps, updateApp } from '../apps/apps.js';
 import { createApiToken, listApiTokens, revokeApiToken } from '../apps/api-tokens.js';
 import { createSession, listSessions, revokeSession } from '../auth/sessions.js';
@@ -179,7 +180,7 @@ export function createApp(deps?: AppDeps): Hono {
       await logLogin(c, r.accountId, 'email', false);
       return c.json({ ok: true, recoveryCode: r.recoveryCode });
     });
-    const session = requireSession(deps.db);
+    const session = requireSession(deps.db, { clientIp });
     // Credential management and account-security routes: session cookie only, never an API token.
     const cookieSession = requireSession(deps.db, { bearer: false });
     app.post('/auth/passkey/register/start', cookieSession, async (c) => c.json(await startPasskeyRegistration(deps.db, c.get('accountId'), deps.config)));
@@ -220,7 +221,7 @@ export function createApp(deps?: AppDeps): Hono {
       const team = await getTeam(deps.db, c.req.param('id'), c.get('accountId'));
       return team ? c.json(team) : teamErr(c, 'not_member');
     });
-    app.delete('/teams/:id', session, async (c) => {
+    app.delete('/teams/:id', cookieSession, async (c) => {
       const r = await deleteTeam(deps.db, c.req.param('id'), c.get('accountId'));
       return 'error' in r ? teamErr(c, r.error) : c.json(r);
     });
@@ -230,13 +231,13 @@ export function createApp(deps?: AppDeps): Hono {
       const r = await inviteMember(deps.db, deps.mailer, c.req.param('id'), c.get('accountId'), b.email, deps.config);
       return 'error' in r ? teamErr(c, r.error) : c.json(r);
     });
-    app.patch('/teams/:id/members/:accountId', session, async (c) => {
+    app.patch('/teams/:id/members/:accountId', cookieSession, async (c) => {
       const b = await jsonBody(c);
       if (b?.role !== 'admin' && b?.role !== 'member') return c.json({ error: 'invalid' }, 400);
       const r = await changeRole(deps.db, c.req.param('id'), c.get('accountId'), c.req.param('accountId'), b.role);
       return 'error' in r ? teamErr(c, r.error) : c.json(r);
     });
-    app.delete('/teams/:id/members/:accountId', session, async (c) => {
+    app.delete('/teams/:id/members/:accountId', cookieSession, async (c) => {
       const r = await removeMember(deps.db, c.req.param('id'), c.get('accountId'), c.req.param('accountId'));
       return 'error' in r ? teamErr(c, r.error) : c.json(r);
     });
@@ -244,7 +245,7 @@ export function createApp(deps?: AppDeps): Hono {
       const r = await leaveTeam(deps.db, c.req.param('id'), c.get('accountId'));
       return 'error' in r ? teamErr(c, r.error) : c.json(r);
     });
-    app.post('/teams/:id/transfer', session, async (c) => {
+    app.post('/teams/:id/transfer', cookieSession, async (c) => {
       const b = await jsonBody(c);
       if (!str(b?.toAccountId, 64)) return c.json({ error: 'invalid' }, 400);
       const r = await transferOwnership(deps.db, c.req.param('id'), c.get('accountId'), b.toAccountId);
@@ -262,13 +263,17 @@ export function createApp(deps?: AppDeps): Hono {
       const a = await getApp(deps.db, c.get('accountId'), c.req.param('id'));
       return a ? c.json(a) : c.json({ error: 'not_found' }, 404);
     });
+    app.get('/apps/:id/usage', session, async (c) => {
+      const u = await getUsage(deps.db, c.get('accountId'), c.req.param('id'));
+      return u ? c.json(u) : c.json({ error: 'not_found' }, 404);
+    });
     app.patch('/apps/:id', session, async (c) => {
       const b = await jsonBody(c);
       if (!str(b?.publishDir, 200)) return c.json({ error: 'invalid' }, 400);
       const r = await updateApp(deps.db, c.get('accountId'), c.req.param('id'), { publishDir: b.publishDir });
       return 'error' in r ? c.json({ error: r.error }, appStatus[r.error]) : c.json(r);
     });
-    app.delete('/apps/:id', session, async (c) => {
+    app.delete('/apps/:id', cookieSession, async (c) => {
       const q = deps.queue;
       const r = await deleteApp(deps.db, c.get('accountId'), c.req.param('id'), {
         enqueueStorageCleanup: q ? async (id) => { await q.send(JOBS.deleteAppStorage, { appId: id }); } : undefined,

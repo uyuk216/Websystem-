@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
-  bigint, check, customType, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid,
+  bigint, boolean, check, customType, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid,
 } from 'drizzle-orm/pg-core';
 
 const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
@@ -181,3 +181,14 @@ export const deployments = pgTable('deployments', {
   createdAt: createdAt(),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
 }, (t) => [index('deployments_app_idx').on(t.appId, t.createdAt)]);
+
+/** Per-app monthly transfer (UTC month 'YYYY-MM'). Written only by the static server (owner role). */
+export const transferUsage = pgTable('transfer_usage', {
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  month: text('month').notNull(),
+  bytes: bigint('bytes', { mode: 'number' }).notNull().default(0),
+  notified80: boolean('notified_80').notNull().default(false),
+}, (t) => [
+  primaryKey({ columns: [t.appId, t.month] }),
+  check('transfer_usage_month_format_check', sql`${t.month} ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'`),
+]);

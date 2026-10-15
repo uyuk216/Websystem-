@@ -22,17 +22,37 @@ export function clearSessionCookie(c: Context): void {
   deleteCookie(c, SESSION_COOKIE, { path: '/', secure: true });
 }
 
+const MAX_BUCKETS = 10_000;
+
 /**
  * Resolves the account from the session cookie or, unless `bearer: false`, from `Authorization: Bearer ysk_...`.
  * Bearer requests get sessionId '' (they have no session). Routes that manage credentials must pass `bearer: false`.
  */
-export function requireSession(db: Db, opts: { bearer?: boolean } = {}): MiddlewareHandler {
+export function requireSession(db: Db, opts: { bearer?: boolean; clientIp?: (c: Context) => string; maxFailures?: number } = {}): MiddlewareHandler {
   const bearer = opts.bearer ?? true;
+  // Failed Bearer attempts per client IP (default 30 per 10 minutes) before answering 429.
+  const failed = new Map<string, { count: number; resetAt: number }>();
+  const max = opts.maxFailures ?? 30;
   return async (c, next) => {
     const auth = c.req.header('authorization');
     if (bearer && auth && /^Bearer /i.test(auth)) {
+      const ip = opts.clientIp?.(c) ?? 'unknown';
+      const now = Date.now();
+      let f = failed.get(ip);
+      if (f && f.resetAt <= now) { failed.delete(ip); f = undefined; }
+      if (f && f.count >= max) {
+        c.header('Retry-After', String(Math.ceil((f.resetAt - now) / 1000)));
+        return c.json({ error: 'rate_limited' }, 429);
+      }
       const t = await resolveApiToken(db, auth.slice(7).trim());
-      if (!t) return c.json({ error: 'unauthorized' }, 401);
+      if (!t) {
+        if (!f) {
+          if (failed.size >= MAX_BUCKETS) for (const [k, v] of failed) if (v.resetAt <= now) failed.delete(k);
+          if (failed.size < MAX_BUCKETS) { f = { count: 0, resetAt: now + 600_000 }; failed.set(ip, f); }
+        }
+        if (f) f.count++;
+        return c.json({ error: 'unauthorized' }, 401);
+      }
       c.set('accountId', t.accountId);
       c.set('sessionId', '');
       return next();
@@ -46,7 +66,6 @@ export function requireSession(db: Db, opts: { bearer?: boolean } = {}): Middlew
   };
 }
 
-const MAX_BUCKETS = 10_000;
 
 /** In-memory fixed-window limiter (phase 1). `key` derives the bucket from the request. */
 export function rateLimit(key: (c: Context) => string, max: number, windowSec: number, maxBuckets = MAX_BUCKETS, onSweep?: () => void): MiddlewareHandler {

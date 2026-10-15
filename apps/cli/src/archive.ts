@@ -24,7 +24,9 @@ export async function collectFiles(root: string): Promise<FileEntry[]> {
     try {
       const gi = await readFile(join(dirAbs, '.gitignore'), 'utf8');
       local = [...matchers, { base: dirRel, ig: ignore().add(gi) }];
-    } catch { /* no .gitignore here */ }
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; // unreadable .gitignore must not silently upload ignored files
+    }
     const entries = await readdir(dirAbs, { withFileTypes: true });
     for (const e of entries) {
       if (isAlwaysExcluded(e.name) || e.isSymbolicLink()) continue;

@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -21,12 +21,16 @@ export function loadConfig(env: Env = process.env): Config | null {
   }
 }
 
-/** Written 0600 (the file holds a credential); the directory is 0700. */
+/** Written 0600 via a temp file + rename (never a world-readable window); the directory is 0700. */
 export function saveConfig(env: Env, cfg: Config): void {
   const p = configPath(env);
-  mkdirSync(dirname(p), { recursive: true, mode: 0o700 });
-  writeFileSync(p, JSON.stringify(cfg), { mode: 0o600 });
-  chmodSync(p, 0o600); // mode is ignored when the file already existed
+  const dir = dirname(p);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700); // mode is ignored when the directory already existed
+  const tmp = `${p}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(cfg), { mode: 0o600 });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, p);
 }
 
 export function clearConfig(env: Env = process.env): void {

@@ -149,4 +149,8 @@ export const en = {
   'deploy.heldForReview': 'The upload contains executable files and will not be published until reviewed.',
   'deploy.upload.invalidType': 'Please choose a ZIP file.',
   'deploy.upload.tooLarge': 'The file is too large (limit 200MB).',
+  'transfer.limitTitle': 'Monthly transfer limit reached',
+  'transfer.limitBody': 'This site has reached its transfer limit for this month and is unavailable until the end of the month. Please let the site owner know.',
+  'transfer.warnSubject': '{app} has used 80% of this month\'s transfer',
+  'transfer.warnBody': 'The site "{app}" has used 80% of its monthly transfer limit ({limit}); usage so far is {used}. When the limit is reached the site returns HTTP 503 until the end of the month.',
 } satisfies Record<keyof typeof ja, string>;

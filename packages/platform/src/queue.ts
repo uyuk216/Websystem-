@@ -5,7 +5,6 @@ export type { PgBoss };
 export const JOBS = {
   processDeployment: 'deployment.process',
   deleteAppStorage: 'app.delete-storage',
-  flushTransfer: 'transfer.flush',
 } as const;
 /** Retries for deployment processing (pg-boss retryLimit); the last attempt records the failure. */
 export const DEPLOY_RETRY_LIMIT = 3;

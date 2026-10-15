@@ -41,13 +41,20 @@ export async function revokeApiToken(db: Db, accountId: string, id: string): Pro
   return rows.length > 0;
 }
 
-/** Pre-authentication lookup by hash (the account is unknown until it resolves). */
+export const LAST_USED_GRANULARITY_MS = 60_000;
+
+/** Pre-authentication lookup by hash (the account is unknown until it resolves). Misses perform no write. */
 export async function resolveApiToken(db: Db, token: string): Promise<{ accountId: string } | null> {
   if (!token.startsWith(TOKEN_PREFIX)) return null;
+  const hash = hashApiToken(token);
   const [row] = await withSystem(db, (tx) => tx
-    .update(apiTokens)
-    .set({ lastUsedAt: new Date() })
-    .where(and(eq(apiTokens.tokenHash, hashApiToken(token)), isNull(apiTokens.revokedAt)))
-    .returning({ accountId: apiTokens.accountId }));
-  return row ?? null;
+    .select({ id: apiTokens.id, accountId: apiTokens.accountId, lastUsedAt: apiTokens.lastUsedAt })
+    .from(apiTokens)
+    .where(and(eq(apiTokens.tokenHash, hash), isNull(apiTokens.revokedAt))));
+  if (!row) return null;
+  const now = Date.now();
+  if (!row.lastUsedAt || now - row.lastUsedAt.getTime() >= LAST_USED_GRANULARITY_MS) {
+    await withSystem(db, (tx) => tx.update(apiTokens).set({ lastUsedAt: new Date(now) }).where(eq(apiTokens.id, row.id)));
+  }
+  return { accountId: row.accountId };
 }

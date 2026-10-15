@@ -19,6 +19,10 @@ describe.each([
     const r = await run([{ n: './index.html', d: b('hello') }, { n: 'css//a.css', d: b('ab') }]);
     expect(r).toEqual({ files: [{ path: 'index.html', size: 5 }, { path: 'css/a.css', size: 2 }], excluded: [], totalBytes: 7 });
   });
+  it('NFC-normalises NFD names (macOS zips) so they match request paths', async () => {
+    const r = await run([{ n: 'e\u0301.html' }]);
+    expect(r).toMatchObject({ files: [{ path: '\u00e9.html' }] });
+  });
   it.each(['../evil', 'a/../../evil', '/etc/passwd', 'C:/x', 'a\\b'])('rejects unsafe path %s', async (n) => {
     expect(await run([{ n }])).toEqual({ error: 'unsafe_path' });
   });
