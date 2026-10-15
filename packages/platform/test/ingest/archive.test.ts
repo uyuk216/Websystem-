@@ -49,6 +49,18 @@ describe.each([
   it('rejects duplicate paths', async () => {
     expect(await run([{ n: 'a' }, { n: './a' }])).toEqual({ error: 'unsafe_path' });
   });
+  it('rejects case-insensitive and NFC collisions', async () => {
+    expect(await run([{ n: 'A.html' }, { n: 'a.HTML' }])).toEqual({ error: 'unsafe_path' });
+    expect(await run([{ n: '\u00e9' }, { n: 'e\u0301' }])).toEqual({ error: 'unsafe_path' });
+  });
+  it('rejects file-vs-directory collisions in both orders', async () => {
+    expect(await run([{ n: 'a' }, { n: 'a/b' }])).toEqual({ error: 'unsafe_path' });
+    expect(await run([{ n: 'a/b' }, { n: 'a' }])).toEqual({ error: 'unsafe_path' });
+  });
+  it('excludes case variants', async () => {
+    const r = await run([{ n: '.ENV' }, { n: '.Git/x' }, { n: 'Node_Modules/y' }, { n: 'z/.ds_store' }, { n: 'ok' }]);
+    expect(r).toMatchObject({ files: [{ path: 'ok', size: 1 }], excluded: ['.ENV', '.Git/x', 'Node_Modules/y', 'z/.ds_store'] });
+  });
   it('rejects corrupt input', async () => {
     expect(await inspectArchive(stream(b('not an archive')), format, L)).toEqual({ error: 'corrupt' });
   });
@@ -88,7 +100,43 @@ describe('tar bombs', () => {
   });
 });
 
+describe('tar total decompression cap', () => {
+  const lim = { maxTotalBytes: 1000, maxFileBytes: 1000, maxExcludedBytes: 5000 };
+  const big = Buffer.alloc(200_000);
+  it('inspect: excluded bodies over cap -> too_large', async () => {
+    const tgz = makeTarGz([{ path: 'node_modules/a', data: big }]);
+    expect(await inspectArchive(stream(tgz), 'tar.gz', lim)).toEqual({ error: 'too_large' });
+  });
+  it('inspect: dropped-type bodies over cap -> too_large', async () => {
+    const tgz = makeTarGz([{ path: 'd', type: 'Directory', data: big }, { path: 'ok' }]);
+    expect(await inspectArchive(stream(tgz), 'tar.gz', lim)).toEqual({ error: 'too_large' });
+  });
+  it('extract: skipped bodies over cap -> too_large', async () => {
+    const tgz = makeTarGz([{ path: 'd', type: 'Directory', data: big }, { path: 'ok' }]);
+    const run = async () => { for await (const e of extractArchive(stream(tgz), 'tar.gz', lim)) void e; };
+    await expect(run()).rejects.toMatchObject({ code: 'too_large' });
+  });
+});
+
 describe('extractArchive', () => {
+  it('enforces collisions itself', async () => {
+    const zip = makeZip([{ name: 'A' }, { name: 'a' }]);
+    const run = async () => { for await (const e of extractArchive(stream(zip), 'zip', L)) void e; };
+    await expect(run()).rejects.toMatchObject({ code: 'unsafe_path' });
+  });
+  it('counts actual bytes toward the total across files', async () => {
+    const zip = makeZip([
+      { name: 'a', data: Buffer.alloc(600, 1), declaredSize: 600 },
+      { name: 'b', data: Buffer.alloc(600, 1) },
+    ]);
+    const run = async () => {
+      for await (const e of extractArchive(stream(zip), 'zip', { maxTotalBytes: 1000, maxFileBytes: 1000 })) {
+        for await (const _ of e.open() as Readable) void _;
+      }
+    };
+    await expect(run()).rejects.toMatchObject({ code: 'too_large' });
+  });
+
   it.each(['zip', 'tar.gz'] as const)('yields kept files with readable streams (%s)', async (format) => {
     const buf = format === 'zip'
       ? makeZip([{ name: 'a.txt', data: b('AAA') }, { name: '.env', data: b('S') }, { name: 'b/c.txt', data: b('CC') }])

@@ -51,9 +51,10 @@ export function normalizeEntryPath(raw: string): string | null {
 
 /** Always-excluded: .env, .env.*, .git/, .DS_Store, node_modules/ */
 export function isExcluded(path: string): boolean {
-  return path.split('/').some(
-    (s) => s === '.git' || s === 'node_modules' || s === '.DS_Store' || s === '.env' || s.startsWith('.env.'),
-  );
+  return path.split('/').some((seg) => {
+    const s = seg.toLowerCase();
+    return s === '.git' || s === 'node_modules' || s === '.ds_store' || s === '.env' || s.startsWith('.env.');
+  });
 }
 
 const EXEC_EXT = new Set(['exe', 'apk', 'dmg', 'msi', 'app', 'deb', 'rpm', 'bat', 'sh', 'jar']);
@@ -158,9 +159,12 @@ async function* tarEntries(file: string, limits: Required<ArchiveLimits>): Async
   parser.on('end', () => push({ done: true }));
   const src = createReadStream(file);
   const gunzip = createGunzip();
+  // Caps ALL decompressed tar bytes (kept, excluded and dropped-type bodies alike).
+  const cap = new Counter(limits.maxTotalBytes + limits.maxExcludedBytes, () => new ArchiveError('too_large'));
   src.on('error', (e) => push({ error: e }));
   gunzip.on('error', (e) => push({ error: e }));
-  src.pipe(gunzip).pipe(parser);
+  cap.on('error', (e) => push({ error: e }));
+  src.pipe(gunzip).pipe(cap).pipe(parser);
   let prev: tar.ReadEntry | undefined;
   let count = 0;
   try {
@@ -168,7 +172,7 @@ async function* tarEntries(file: string, limits: Required<ArchiveLimits>): Async
       if (prev) { prev.resume(); prev = undefined; }
       while (!queue.length) await new Promise<void>((r) => (wake = r));
       const item = queue.shift()!;
-      if (item.error) throw new ArchiveError('corrupt');
+      if (item.error) throw toArchiveError(item.error);
       if (item.done) return;
       const entry = item.entry!;
       prev = entry;
@@ -185,6 +189,7 @@ async function* tarEntries(file: string, limits: Required<ArchiveLimits>): Async
   } finally {
     src.destroy();
     gunzip.destroy();
+    cap.destroy();
   }
 }
 
@@ -204,7 +209,21 @@ async function* rawEntries(dir: string, input: Readable, format: ArchiveFormat, 
   } catch (e) {
     throw toArchiveError(e);
   }
-  yield* format === 'zip' ? zipEntries(file, limits) : tarEntries(file, limits);
+  const files = new Set<string>();
+  const dirs = new Set<string>();
+  const src = format === 'zip' ? zipEntries(file, limits) : tarEntries(file, limits);
+  for await (const e of src) {
+    const key = e.path.normalize('NFC').toLowerCase();
+    if (files.has(key) || dirs.has(key)) throw new ArchiveError('unsafe_path');
+    const segs = key.split('/');
+    for (let i = 1; i < segs.length; i++) {
+      const prefix = segs.slice(0, i).join('/');
+      if (files.has(prefix)) throw new ArchiveError('unsafe_path');
+      dirs.add(prefix);
+    }
+    files.add(key);
+    yield e;
+  }
 }
 
 /** Drains `s`, throwing if actual bytes exceed `max`. Returns actual count. */
@@ -232,12 +251,9 @@ export async function inspectArchive(
   try {
     const files: FileEntry[] = [];
     const excluded: string[] = [];
-    const seen = new Set<string>();
     let total = 0;
     let excludedBytes = 0;
     for await (const e of rawEntries(dir, input, format, limits)) {
-      if (seen.has(e.path)) throw new ArchiveError('unsafe_path');
-      seen.add(e.path);
       if (e.excluded) {
         excluded.push(e.path);
         if (format === 'tar.gz') {
@@ -263,6 +279,9 @@ export async function inspectArchive(
 /**
  * Yields kept (non-excluded) files. Each open() stream must be consumed before
  * advancing; it errors if real bytes exceed the limits. Throws ArchiveError.
+ * Collision/duplicate checks and byte counting are enforced here independently
+ * of inspectArchive. Callers MUST iterate with for-await to completion or call
+ * return(); that runs the finally block which removes the temp directory.
  */
 export async function* extractArchive(
   input: Readable,
@@ -273,7 +292,10 @@ export async function* extractArchive(
   const dir = await mkdtemp(join(tmpdir(), 'ingest-'));
   try {
     let total = 0;
+    let pending = 0; // declared size of an entry whose stream was not fully consumed
     for await (const e of rawEntries(dir, input, format, limits)) {
+      total += pending;
+      pending = 0;
       if (e.excluded) continue;
       if (e.declared > limits.maxFileBytes) throw new ArchiveError('file_too_large');
       if (total + e.declared > limits.maxTotalBytes) throw new ArchiveError('too_large');
@@ -282,12 +304,16 @@ export async function* extractArchive(
         new ArchiveError(budget === limits.maxFileBytes ? 'file_too_large' : 'too_large'),
       );
       const open = () => e.open().on('error', (er) => counter.destroy(er)).pipe(counter);
+      pending = e.declared;
       yield {
         path: e.path,
         size: e.declared,
         open: () => {
           const s = open();
-          s.on('end', () => { total += counter.n; });
+          s.on('end', () => {
+            total += counter.n; // actual bytes, not declared
+            pending = 0;
+          });
           return s;
         },
       };
