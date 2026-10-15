@@ -1,5 +1,5 @@
 export class ApiError extends Error {
-  constructor(public status: number, public code: string) {
+  constructor(public status: number, public code: string, public body: Record<string, unknown> = {}) {
     super(code);
   }
 }
@@ -24,7 +24,7 @@ export async function api<T = unknown>(path: string, opts: Options = {}): Promis
       const locale = window.location.pathname.split('/')[1] === 'en' ? 'en' : 'ja';
       window.location.href = `/${locale}/login`;
     }
-    throw new ApiError(res.status, typeof data.error === 'string' ? data.error : 'error');
+    throw new ApiError(res.status, typeof data.error === 'string' ? data.error : 'error', data);
   }
   return data as T;
 }

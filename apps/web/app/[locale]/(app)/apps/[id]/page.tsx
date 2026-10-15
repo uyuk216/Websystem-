@@ -27,6 +27,7 @@ export default function AppPage() {
   const [savedDir, setSavedDir] = useState(false);
   const [savedGithub, setSavedGithub] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [rbFail, setRbFail] = useState<{ reason: string; logs: string[] } | null>(null);
   const [publishDir, setPublishDir] = useState('');
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
@@ -80,8 +81,13 @@ export default function AppPage() {
   }
 
   async function rollback(did: string) {
-    setError(null);
-    try { await api(`/apps/${id}/deployments/${did}/rollback`, { method: 'POST' }); await Promise.all([loadDeps(), loadApp()]); } catch (err) { fail(err); }
+    setError(null); setRbFail(null);
+    try { await api(`/apps/${id}/deployments/${did}/rollback`, { method: 'POST' }); await Promise.all([loadDeps(), loadApp()]); } catch (err) {
+      if (err instanceof ApiError && err.code === 'start_failed') {
+        const { reason, logs } = err.body as { reason?: unknown; logs?: unknown };
+        setRbFail({ reason: typeof reason === 'string' ? reason : 'deploy.error.health_check_failed', logs: Array.isArray(logs) ? logs.map(String) : [] });
+      } else fail(err);
+    }
   }
 
   async function savePublishDir(e: React.FormEvent) {
@@ -123,6 +129,12 @@ export default function AppPage() {
         <button type="submit" disabled={uploading}>{t('deploy.upload')}</button>
       </form>
 
+      {rbFail && (
+        <div role="alert">
+          <p>{t(rbFail.reason.startsWith('deploy.') ? (rbFail.reason as MessageKey) : 'deploy.error.health_check_failed')}</p>
+          {rbFail.logs.length > 0 && <pre data-testid="rollback-log">{rbFail.logs.join('\n')}</pre>}
+        </div>
+      )}
       <h2>{t('deploy.title')}</h2>
       {deps?.length === 0 && <p>{t('deploy.empty')}</p>}
       {deps && deps.length > 0 && (

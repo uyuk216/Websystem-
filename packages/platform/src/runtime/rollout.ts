@@ -45,12 +45,13 @@ export async function waitHealthy(driver: RuntimeDriver, appId: string, deployme
 }
 
 /** Every string a secret may show up as in a log: raw, base64 (std/url-safe) and URL-encoded; per line for multi-line values. */
+// Known residual risk: base64 of a secret embedded at a non-zero offset inside a larger encoded blob is not detected.
 export function redactionTerms(secrets: string[]): string[] {
   const out = new Set<string>();
   const add = (v: string) => {
     if (v.trim().length < 4) return;
     const b = Buffer.from(v, 'utf8');
-    for (const f of [v, v.trim(), encodeURIComponent(v), encodeURIComponent(v).replace(/%20/g, '+'), b.toString('base64'), b.toString('base64').replace(/=+$/, ''), b.toString('base64url')]) {
+    for (const f of [v, v.trim(), JSON.stringify(v).slice(1, -1), encodeURIComponent(v), encodeURIComponent(v).replace(/%20/g, '+'), b.toString('base64'), b.toString('base64').replace(/=+$/, ''), b.toString('base64url')]) {
       if (f.length >= 4) out.add(f);
     }
   };

@@ -30,3 +30,11 @@ describe('collectLogs redaction', () => {
     expect(await run(['abc'], ['abc'])).toEqual(['abc']);
   });
 });
+
+describe('collectLogs JSON-escaped redaction', () => {
+  it('redacts the JSON-escaped form of a secret', async () => {
+    const v = 'pa"ss\\word\nline2';
+    const out = await run([`{"k":${JSON.stringify(v)}}`, JSON.stringify(v).slice(1, -1)], [v]);
+    expect(out.join('\n')).not.toMatch(/pa\\"ss/);
+  });
+});

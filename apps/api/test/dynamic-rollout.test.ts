@@ -177,3 +177,21 @@ describe('runtime log exposure', () => {
     expect(theirs).toMatchObject({ status: 'failed', findings: null });
   }), 240_000);
 });
+
+describe('rollback start_failed body', () => {
+  it('carries reason and redacted logs for managers; non-managers get neither', () => withTestDb(async (db) => {
+    const s = await setup(db);
+    await setEnvVar(db, envKey, s.accountId, s.appId, 'TOKEN', 'sekrit-token-value');
+    const v1 = await deploy(db, s, app('v1'));
+    await deploy(db, s, app('v2'));
+    const failing = Object.create(driver) as DockerDriver;
+    failing.status = async () => 'crashed';
+    failing.logs = async () => ['died with sekrit-token-value'];
+    const r = await rollback(db, s.accountId, s.appId, v1.id, { ...rt, driver: failing });
+    expect(r).toEqual({ error: 'start_failed', reason: 'deploy.error.app_exited', logs: ['died with ***'] });
+    const [stranger] = await db.insert(accounts).values({ emailHash: `st${n++}`, emailEnc: 'e', displayName: 'S', locale: 'ja', adultFrom: '2030-01' }).returning();
+    const r2 = await rollback(db, stranger!.id, s.appId, v1.id, { ...rt, driver: failing });
+    expect(r2).not.toHaveProperty('logs');
+    expect(r2).not.toHaveProperty('reason');
+  }), 240_000);
+});
