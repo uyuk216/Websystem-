@@ -188,7 +188,7 @@ export const deployments = pgTable('deployments', {
   index('deployments_app_idx').on(t.appId, t.createdAt),
   // A commit is deployed at most once while it is queued, processing or live (atomic webhook dedupe).
   uniqueIndex('deployments_app_commit_active_idx').on(t.appId, t.commitSha)
-    .where(sql`${t.commitSha} is not null and ${t.status} in ('queued', 'processing', 'live')`),
+    .where(sql`${t.commitSha} is not null and ${t.status} in ('queued', 'processing', 'live', 'built')`),
 ]);
 
 /** Per-app monthly transfer (UTC month 'YYYY-MM'). Written only by the static server (owner role). */

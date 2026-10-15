@@ -1,0 +1,2 @@
+DROP INDEX "deployments_app_commit_active_idx";--> statement-breakpoint
+CREATE UNIQUE INDEX "deployments_app_commit_active_idx" ON "deployments" USING btree ("app_id","commit_sha") WHERE "deployments"."commit_sha" is not null and "deployments"."status" in ('queued', 'processing', 'live', 'built');

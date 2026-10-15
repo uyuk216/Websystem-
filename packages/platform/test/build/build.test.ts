@@ -31,14 +31,20 @@ describe('buildImage', () => {
     if (!('dockerfile' in stack)) throw new Error('stack');
     const dir = ctx({ ...files, Dockerfile: stack.dockerfile });
     const t = tag();
-    const r = await buildImage(dir, { tag: t });
+    const r = await buildImage(dir, { tag: t, buildId: 'test-node' });
     expect(r).toMatchObject({ ok: true, imageRef: t });
     if (!r.ok) return;
     expect(r.sizeBytes).toBeGreaterThan(0);
     expect(execFileSync('docker', ['image', 'inspect', '--format', '{{.Config.User}}', t]).toString().trim()).toBe('node');
-    const out = execFileSync('docker', ['run', '--rm', '-e', 'PORT=9191', t, 'sh', '-c',
-      '(npm start >/dev/null 2>&1 &) ; sleep 2; wget -qO- http://127.0.0.1:9191/']).toString();
-    expect(out).toBe('hello');
+    // Same hardening as the runtime driver: non-root uid, read-only rootfs, only /tmp writable.
+    const name = `ys-test-ro-${process.pid}`;
+    execFileSync('docker', ['run', '-d', '--name', name, '--read-only', '--tmpfs', '/tmp:size=64m', '--user', '65534:65534',
+      '--cap-drop', 'ALL', '-e', 'PORT=9191', t]);
+    try {
+      await new Promise((r) => setTimeout(r, 3000));
+      const out = execFileSync('docker', ['exec', name, 'wget', '-qO-', 'http://127.0.0.1:9191/']).toString();
+      expect(out).toBe('hello');
+    } finally { execFileSync('docker', ['rm', '-f', name], { stdio: 'ignore' }); }
   }, 180_000);
 
   it('fails with build_failed and keeps the log on a broken build', async () => {
@@ -49,10 +55,23 @@ describe('buildImage', () => {
 
   it('stops an infinite loop at the timeout', async () => {
     const t0 = Date.now();
-    const r = await buildImage(ctx({ Dockerfile: 'FROM alpine:3.20\nRUN while true; do :; done\n' }), { tag: tag(), timeoutMs: 8_000 });
+    const r = await buildImage(ctx({ Dockerfile: 'FROM alpine:3.20\nRUN while true; do :; done\n' }), { tag: tag(), timeoutMs: 8_000, buildId: 'test-timeout' });
     expect(r).toMatchObject({ ok: false, reason: 'timeout' });
     expect(Date.now() - t0).toBeLessThan(60_000);
+    const ids = execFileSync('docker', ['ps', '-aq']).toString().split('\n').filter(Boolean);
+    for (const id of ids) {
+      const cg = execFileSync('docker', ['inspect', '--format', '{{.HostConfig.CgroupParent}}', id]).toString().trim();
+      expect(cg).not.toBe('ys-build-test-timeout');
+    }
   }, 90_000);
+
+  it('applies memory limit and the ys-build network to build steps', async () => {
+    const r = await buildImage(ctx({ Dockerfile: 'FROM alpine:3.20\nRUN cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null; echo mem-done\n' }), { tag: tag(), buildId: 'test-mem' });
+    expect(r.ok).toBe(true);
+    expect(r.log).toContain('1073741824');
+    const net = JSON.parse(execFileSync('docker', ['network', 'inspect', 'ys-build']).toString())[0];
+    expect(net.Options['com.docker.network.bridge.enable_icc']).toBe('false');
+  }, 120_000);
 
   it('rejects and removes an image over the size limit', async () => {
     const t = tag();

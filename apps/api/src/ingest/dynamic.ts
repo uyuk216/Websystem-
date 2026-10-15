@@ -5,7 +5,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createWriteStream } from 'node:fs';
 import { eq, sql } from 'drizzle-orm';
-import { buildImage, detectStack, extractArchive, type ArchiveFormat, type Storage } from 'platform';
+import { buildImage, detectStack, extractArchive, removeImage, type ArchiveFormat, type Storage } from 'platform';
 import { DYNAMIC_LIMITS } from 'shared';
 import { withSystem, type Db } from '../db/client.js';
 import { deployments } from '../db/schema.js';
@@ -85,6 +85,7 @@ export async function processDynamicDeployment(db: Db, storage: Storage, job: Dy
 
   const dir = await mkdtemp(join(tmpdir(), 'ys-ctx-'));
   const tag = imageTag(appId, deploymentId);
+  let handedOff = false;
   try {
     await extractTo(storage, job, dir);
     const files = await listFiles(dir);
@@ -96,7 +97,7 @@ export async function processDynamicDeployment(db: Db, storage: Storage, job: Dy
     }
 
     const result = await buildImage(dir, {
-      tag,
+      tag, buildId: deploymentId,
       timeoutMs: DYNAMIC_LIMITS.buildTimeoutMinutes * 60_000,
       maxImageBytes: DYNAMIC_LIMITS.imageBytes,
       maxLogBytes: 5 * 1024 ** 2,
@@ -111,9 +112,12 @@ export async function processDynamicDeployment(db: Db, storage: Storage, job: Dy
         .where(sql`${deployments.id} = ${deploymentId} AND ${deployments.status} = 'processing'`).returning({ id: deployments.id });
       return rows.length;
     });
-    if (updated === 0) return; // app or deployment gone meanwhile; image cleanup belongs to app deletion (Task 3)
+    if (updated === 0) return; // app or deployment gone meanwhile: the image is removed in finally
     await rolloutDynamic(db, deploymentId);
+    handedOff = true;
   } finally {
+    // Every path except a successful hand-off must not leave the image behind (failure, retry, deleted app).
+    if (!handedOff) await removeImage(tag).catch(() => undefined);
     await rm(dir, { recursive: true, force: true });
   }
 }

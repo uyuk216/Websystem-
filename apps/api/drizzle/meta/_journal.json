@@ -127,6 +127,13 @@
       "when": 1792077398155,
       "tag": "0017_early_nemesis",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792078111159,
+      "tag": "0018_loud_viper",
+      "breakpoints": true
     }
   ]
 }

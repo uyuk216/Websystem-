@@ -99,3 +99,12 @@ sudo iptables -I DOCKER-USER -p tcp --dport 25 -j DROP
 ```
 
 `ys-apps` は `com.docker.network.bridge.enable_icc=false` で作成され、アプリ同士は通信できません（既存のネットワークが無効化されていない場合は、コンテナがなければ自動で作り直します）。コンテナ名は `ys-app-<appId>-<deploymentId 先頭 8 文字>` で、同じアプリの新旧デプロイを同時に動かせます。
+
+## 動的アプリのビルド
+
+- 開発・テストではクラシックビルダー（`DOCKER_BUILDKIT=0`）で `docker build` を実行する。ビルド手順のコンテナにメモリ 1GB（スワップ込み）・CPU 1 を適用でき、BuildKit では効かないため。
+- ビルドは専用ブリッジ `ys-build`（`enable_icc=false`）で行い、ビルド手順どうしは通信できない。外向き通信は許可（`npm install` などのため）。
+- ビルドごとに `--cgroup-parent ys-build-<deploymentId>` とラベル `ys.build=<deploymentId>` を付け、タイムアウト・失敗時はそのビルドのコンテナと途中のレイヤーだけを削除する（他のコンテナは触らない）。タイムアウトは SIGINT のあと 10 秒で SIGKILL。
+- 15 分・イメージ 1GB・ログ 5MB で打ち切る。失敗したデプロイのイメージ `ys/<appId>:<deploymentId>` は削除する。
+- 制限事項：ビルド中のディスク使用量は Docker 側では制限できない（ビルドコンテキストの大きさはアップロード時に制限済み、イメージは完成後に 1GB で判定）。ビルド中にディスクを埋める手順は開発環境では防げない。
+- 本番は Kubernetes 上の隔離された rootless BuildKit（ephemeral-storage の上限つき）で行う（フェーズ 8）。

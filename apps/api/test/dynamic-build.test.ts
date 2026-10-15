@@ -56,6 +56,7 @@ describe('dynamic deployment build', () => {
   it('fails with a build error and keeps the log', () => withTestDb(async (db) => {
     const { appId, d } = await deploy(db, { Dockerfile: 'FROM alpine:3.20\nRUN echo fail-marker && exit 1\n' });
     expect(d).toMatchObject({ status: 'failed', message: 'deploy.error.build_failed', imageRef: null });
+    expect(() => execFileSync('docker', ['image', 'inspect', `ys/${appId}:${d.id}`], { stdio: 'ignore' })).toThrow();
     expect(await text((await storage.sources.get(d.buildLogKey!))!.body)).toContain('fail-marker');
     await deleteAppStorage(storage, appId);
   }), 120_000);

@@ -7,7 +7,7 @@ export const DEFAULT_PORT = 8080;
 
 export function nodeDockerfile(opts: { hasLockfile: boolean }): string {
   return `FROM ${NODE_IMAGE}
-ENV NODE_ENV=production PORT=${DEFAULT_PORT}
+ENV NODE_ENV=production PORT=${DEFAULT_PORT} npm_config_cache=/tmp/.npm npm_config_logs_dir=/tmp/.npm/_logs npm_config_update_notifier=false
 WORKDIR /app
 COPY package*.json ./
 RUN ${opts.hasLockfile ? 'npm ci --omit=dev' : 'npm install --omit=dev'}
