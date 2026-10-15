@@ -10,7 +10,8 @@
     "./transfer": "./src/usage/transfer.ts",
     "./mailer": "./src/mail/mailer.ts",
     "./deployments": "./src/apps/deployments.ts",
-    "./publish": "./src/ingest/publish.ts"
+    "./publish": "./src/ingest/publish.ts",
+    "./dynamic": "./src/ingest/dynamic.ts"
   },
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/server.ts",

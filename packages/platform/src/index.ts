@@ -8,3 +8,4 @@ export * from './runtime/kubernetes-manifests.js';
 export * from './build/detect.js';
 export * from './build/dockerfiles.js';
 export * from './build/build.js';
+export * from './runtime/rollout.js';

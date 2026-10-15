@@ -1,16 +1,19 @@
 import { createQueue, createStorage, loadStorageConfig, startQueue } from 'platform';
 import { createDb } from 'api/db';
 import { sweepStaleDeployments } from 'api/publish';
+import { createDynamicRuntime } from 'api/dynamic';
 import { defaultHandlers, registerHandlers } from './worker.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error('Missing required env var: DATABASE_URL');
 
+// Throws with a clear message when the dynamic runtime is enabled but APP_ENV_KEY is missing.
+const runtime = createDynamicRuntime(process.env);
 const storage = createStorage(loadStorageConfig(process.env));
 await storage.ensureBuckets();
 const boss = await startQueue(createQueue(databaseUrl));
 const { db, sql } = createDb(databaseUrl);
-await registerHandlers(boss, defaultHandlers({ db, storage }));
+await registerHandlers(boss, defaultHandlers({ db, storage, runtime }));
 
 // Stale `queued` deployments (never enqueued, or the enqueuing process died) are failed at startup and every 10 minutes.
 const sweep = () => sweepStaleDeployments(db).then((n) => { if (n > 0) console.log(`worker: failed ${n} stale queued deployment(s)`); }, (e: unknown) => console.error('worker: stale sweep failed', e));

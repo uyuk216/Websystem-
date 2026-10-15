@@ -1,9 +1,9 @@
 import { eq, sql } from 'drizzle-orm';
-import { ArchiveError, BUCKETS, JOBS, appPrefix, extractArchive, type ArchiveFormat, type Storage } from 'platform';
+import { ArchiveError, BUCKETS, JOBS, appPrefix, extractArchive, removeAppImages, type ArchiveFormat, type Storage } from 'platform';
 import { UUID } from '../auth/cross-device.js';
 import { withSystem, type Db } from '../db/client.js';
 import { apps, deployments } from '../db/schema.js';
-import { processDynamicDeployment } from './dynamic.js';
+import { processDynamicDeployment, type DynamicRuntime } from './dynamic.js';
 import { LIMITS, entryPath, inspect, relativeToPublishDir } from './inspect.js';
 
 const MIME: Record<string, string> = {
@@ -33,7 +33,7 @@ async function publishFiles(storage: Storage, sourceKey: string, format: Archive
  * Every outcome, including unexpected errors, is recorded on the deployment (status + i18n message key).
  */
 export async function processDeployment(
-  db: Db, storage: Storage, deploymentId: string, opts: { lastAttempt?: boolean } = {},
+  db: Db, storage: Storage, deploymentId: string, opts: { lastAttempt?: boolean; runtime?: DynamicRuntime } = {},
 ): Promise<void> {
   if (!UUID.test(deploymentId)) return;
   const claimed = await withSystem(db, async (tx) => {
@@ -58,7 +58,7 @@ export async function processDeployment(
     if (claimed.kind === 'dynamic') {
       return await processDynamicDeployment(db, storage, {
         deploymentId, appId, sourceKey, format, stripTop, publishDir: claimed.publish_dir,
-      });
+      }, opts.runtime);
     }
     const out = await inspect(storage, sourceKey, format, claimed.publish_dir, stripTop);
     if (out.kind === 'failed') return await finish({ status: 'failed', message: out.message });
@@ -109,8 +109,15 @@ export async function processDeployment(
   }
 }
 
-/** Removes all stored files of an app (sources and published sites). */
-export async function deleteAppStorage(storage: Storage, appId: string): Promise<void> {
+/**
+ * Removes all stored files of an app (sources and published sites) and, when a runtime is given, its running
+ * containers and built images. Stopping comes first so nothing keeps serving a deleted app.
+ */
+export async function deleteAppStorage(storage: Storage, appId: string, runtime?: DynamicRuntime): Promise<void> {
+  if (runtime) {
+    await runtime.driver.stop(appId);
+    await removeAppImages(appId);
+  }
   await storage.sources.deletePrefix(appPrefix(BUCKETS.sources, appId));
   await storage.sites.deletePrefix(appPrefix(BUCKETS.sites, appId));
 }

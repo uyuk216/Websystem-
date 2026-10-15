@@ -1,4 +1,5 @@
 import { deleteAppStorage, processDeployment } from 'api/publish';
+import type { DynamicRuntime } from 'api/dynamic';
 import type { Db } from 'api/db';
 import { DEPLOY_RETRY_LIMIT, JOBS, type JobName, type PgBoss, type Storage } from 'platform';
 
@@ -6,7 +7,7 @@ export type JobHandler = (data: unknown, ctx?: { lastAttempt: boolean }) => Prom
 export type Handlers = Record<JobName, JobHandler>;
 
 /** Job handlers. (Transfer counters are flushed by the static server itself, not by a job.) */
-export function defaultHandlers(deps?: { db: Db; storage: Storage }): Handlers {
+export function defaultHandlers(deps?: { db: Db; storage: Storage; runtime?: DynamicRuntime }): Handlers {
   const todo = (name: string): JobHandler => async () => {
     console.warn(`worker: no handler implemented for ${name}`);
   };
@@ -21,13 +22,13 @@ const field = (data: unknown, name: string): string | null => {
   const v = (data as Record<string, unknown> | null)?.[name];
   return typeof v === 'string' && UUID_RE.test(v) ? v : null;
 };
-const makeProcessDeployment = (d: { db: Db; storage: Storage }): JobHandler => async (data, ctx) => {
+const makeProcessDeployment = (d: { db: Db; storage: Storage; runtime?: DynamicRuntime }): JobHandler => async (data, ctx) => {
   const id = field(data, 'deploymentId');
-  if (id) await processDeployment(d.db, d.storage, id, { lastAttempt: ctx?.lastAttempt ?? false });
+  if (id) await processDeployment(d.db, d.storage, id, { lastAttempt: ctx?.lastAttempt ?? false, runtime: d.runtime });
 };
-const makeDeleteAppStorage = (d: { storage: Storage }): JobHandler => async (data) => {
+const makeDeleteAppStorage = (d: { storage: Storage; runtime?: DynamicRuntime }): JobHandler => async (data) => {
   const id = field(data, 'appId');
-  if (id) await deleteAppStorage(d.storage, id);
+  if (id) await deleteAppStorage(d.storage, id, d.runtime);
 };
 
 /** Registers one handler per job name. The boss must already be started with queues created. */

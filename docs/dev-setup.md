@@ -89,7 +89,7 @@ Migrations 0006/0007 enable and FORCE RLS on accounts, owners, sessions, passkey
 
 ## 動的アプリのランタイム（Docker ドライバ）
 
-開発では `packages/platform/src/runtime/docker.ts` がアプリを `ys-apps` ブリッジネットワーク上のコンテナ（`ys-app-<appId>`）として起動します。ホスト側へは `127.0.0.1` のランダムなポートだけを公開し、root 以外のユーザー・全 capability 削除・`no-new-privileges`・読み取り専用ルート（`/tmp` のみ 64MB tmpfs）・メモリ／CPU／PID 上限を付けます。`RUNTIME=runsc` を設定すると gVisor で動かし、未設定なら警告を出して runc で動かします（開発用）。
+開発では `packages/platform/src/runtime/docker.ts` がアプリを `ys-apps` ブリッジネットワーク上のコンテナ（`ys-app-<appId>`）として起動します。ホスト側へは `127.0.0.1` のランダムなポートだけを公開し、root 以外のユーザー・全 capability 削除・`no-new-privileges`・読み取り専用ルート（`/tmp` のみ 64MB tmpfs）・メモリ／CPU／PID 上限を付けます。ワーカーと API は `APP_ENV_KEY`（32 バイトの base64）が無いと動的ランタイムを有効にできず起動時にエラーになります（`DYNAMIC_RUNTIME=off` で無効化）。`RUNTIME=runsc` を設定すると gVisor で動かし、未設定なら警告を出して runc で動かします（開発用）。
 
 注意：Docker では `--add-host` で IP リテラル `169.254.169.254` を無効化できません。クラウド上のホストでメタデータサービスを遮断するには、ホスト側で次を設定してください（本番は Kubernetes の NetworkPolicy が `169.254.169.254/32` とポート 25 を遮断します）。
 

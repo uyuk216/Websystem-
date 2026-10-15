@@ -14,6 +14,7 @@ import Busboy from 'busboy';
 import { Readable } from 'node:stream';
 import { bodyLimit } from 'hono/body-limit';
 import { JOBS, type Storage } from 'platform';
+import type { DynamicRuntime } from '../ingest/dynamic.js';
 import { STATIC_LIMITS } from 'shared';
 import { createDeployment, listDeployments, rollback, type JobQueue } from '../apps/deployments.js';
 import { createApp as createAppRecord, deleteApp, getApp, listApps, listOwners, updateApp } from '../apps/apps.js';
@@ -51,6 +52,8 @@ export interface AppDeps {
   queue?: JobQueue;
   /** Overrides the 200MB archive size limit (dev/e2e only; set through UPLOAD_MAX_BYTES). */
   uploadMaxBytes?: number;
+  /** Dynamic-app runtime (container driver + env key); rollback of dynamic apps needs it. */
+  runtime?: DynamicRuntime;
   /** GitHub App integration; the webhook and PATCH /apps/:id/github are registered only when this is given. */
   github?: {
     webhookSecret: string;
@@ -297,7 +300,7 @@ export function createApp(deps?: AppDeps): Hono {
     if (deps.storage && deps.queue) {
       const storage = deps.storage;
       const queue = deps.queue;
-      const depStatus = { not_found: 404, forbidden: 403, too_large: 413, invalid: 400, invalid_state: 409 } as const;
+      const depStatus = { not_found: 404, forbidden: 403, too_large: 413, invalid: 400, invalid_state: 409, start_failed: 502 } as const;
       // Multipart overhead on top of the archive limit; the exact archive size is enforced while streaming.
       const uploadLimit = bodyLimit({
         maxSize: (deps.uploadMaxBytes ?? STATIC_LIMITS.storageBytes) + 1024 * 1024,
@@ -330,7 +333,7 @@ export function createApp(deps?: AppDeps): Hono {
         return c.json({ deployments: await listDeployments(deps.db, c.get('accountId'), a.id) });
       });
       app.post('/apps/:id/deployments/:did/rollback', session, async (c) => {
-        const r = await rollback(deps.db, c.get('accountId'), c.req.param('id'), c.req.param('did'));
+        const r = await rollback(deps.db, c.get('accountId'), c.req.param('id'), c.req.param('did'), deps.runtime);
         return 'error' in r ? c.json({ error: r.error }, depStatus[r.error]) : c.json(r);
       });
     }

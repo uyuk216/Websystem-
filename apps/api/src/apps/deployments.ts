@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { Transform, type Readable } from 'node:stream';
 import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
-import { BUCKETS, JOBS, appPrefix, type ArchiveFormat, type Storage } from 'platform';
+import { BUCKETS, JOBS, appPrefix, collectLogs, waitHealthy, type ArchiveFormat, type Storage } from 'platform';
 import { STATIC_LIMITS } from 'shared';
 import { UUID } from '../auth/cross-device.js';
 import { withAccount, withSystem, type Db, type Tx } from '../db/client.js';
 import { apps, deployments } from '../db/schema.js';
 import { mayManage } from './apps.js';
+import { getAppEnvForRun } from './env-vars.js';
+import { CONTAINER_PORT, type DynamicRuntime } from '../ingest/dynamic.js';
 
 /** The slice of pg-boss that deployment code needs (tests pass a fake). */
 export interface JobQueue {
@@ -14,7 +16,7 @@ export interface JobQueue {
 }
 export type DeploySource = 'upload' | 'cli' | 'github';
 export type CreateDeploymentError = 'not_found' | 'forbidden' | 'too_large' | 'invalid';
-export type RollbackError = 'not_found' | 'forbidden' | 'invalid_state';
+export type RollbackError = 'not_found' | 'forbidden' | 'invalid_state' | 'start_failed';
 
 export const DOWNLOAD_TIMEOUT_MS = 120_000;
 
@@ -156,21 +158,60 @@ export async function listDeployments(db: Db, accountId: string, appId: string) 
   }).from(deployments).where(eq(deployments.appId, appId)).orderBy(desc(deployments.createdAt), desc(deployments.id)));
 }
 
-/** Makes a past `live`/`superseded` deployment the live one again. */
+/**
+ * Makes a past `live`/`superseded` deployment the live one again. For a dynamic app the target's image is
+ * started again and health-checked first; the current version keeps serving until the switch, and a target
+ * that does not come up leaves everything as it was (`start_failed`).
+ */
 export async function rollback(
-  db: Db, accountId: string, appId: string, deploymentId: string,
+  db: Db, accountId: string, appId: string, deploymentId: string, rt?: DynamicRuntime,
 ): Promise<{ ok: true } | { error: RollbackError }> {
   if (!UUID.test(appId) || !UUID.test(deploymentId)) return { error: 'not_found' };
-  return withAccount(db, accountId, async (tx) => {
+  const pre = await withAccount(db, accountId, async (tx) => {
+    const [a] = await tx.select({ ownerId: apps.ownerId, kind: apps.kind }).from(apps).where(eq(apps.id, appId));
+    if (!a) return { error: 'not_found' as const };
+    if (!(await mayManage(tx, accountId, a.ownerId))) return { error: 'forbidden' as const };
+    const [d] = await tx.select({ status: deployments.status, siteKey: deployments.siteKey, imageRef: deployments.imageRef })
+      .from(deployments).where(and(eq(deployments.id, deploymentId), eq(deployments.appId, appId)));
+    if (!d) return { error: 'not_found' as const };
+    if (!['live', 'superseded'].includes(d.status) || !(a.kind === 'dynamic' ? d.imageRef : d.siteKey)) return { error: 'invalid_state' as const };
+    return { ownerId: a.ownerId, kind: a.kind, imageRef: d.imageRef, wasLive: d.status === 'live' };
+  });
+  if (pre.error) return { error: pre.error };
+
+  let started = false;
+  if (pre.kind === 'dynamic') {
+    if (!rt || !pre.imageRef) return { error: 'invalid_state' };
+    try {
+      const env = await getAppEnvForRun(db, rt.envKey, appId);
+      await rt.driver.start({
+        appId, deploymentId, ownerId: pre.ownerId, image: pre.imageRef, env: { ...env, PORT: String(CONTAINER_PORT) },
+        limits: { memoryMb: 512, cpu: 0.5, pids: 256 }, port: CONTAINER_PORT,
+      });
+      started = true;
+      const health = await waitHealthy(rt.driver, appId, deploymentId, rt.health);
+      if (!health.ok) {
+        console.error('rollback target failed its health check', appId, deploymentId, await collectLogs(rt.driver, appId, deploymentId, Object.values(env)));
+        if (!pre.wasLive) await rt.driver.stopDeployment(appId, deploymentId);
+        return { error: 'start_failed' };
+      }
+    } catch (e) {
+      if (started && !pre.wasLive) await rt.driver.stopDeployment(appId, deploymentId).catch(() => undefined);
+      console.error('rollback start failed', appId, deploymentId, e);
+      return { error: 'start_failed' };
+    }
+  }
+
+  const switched = await withAccount(db, accountId, async (tx) => {
     // Same lock as the worker's switch, so a rollback and a finishing deployment serialise.
     const [a] = await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId)).for('update');
     if (!a) return { error: 'not_found' as const };
     if (!(await mayManage(tx, accountId, a.ownerId))) return { error: 'forbidden' as const };
     const [d] = await tx.select().from(deployments).where(and(eq(deployments.id, deploymentId), eq(deployments.appId, appId)));
     if (!d) return { error: 'not_found' as const };
-    if (!['live', 'superseded'].includes(d.status) || !d.siteKey) return { error: 'invalid_state' as const };
-    await tx.update(deployments).set({ status: 'superseded' })
-      .where(and(eq(deployments.appId, appId), eq(deployments.status, 'live'), ne(deployments.id, d.id)));
+    if (!['live', 'superseded'].includes(d.status) || !(pre.kind === 'dynamic' ? d.imageRef : d.siteKey)) return { error: 'invalid_state' as const };
+    const old = await tx.update(deployments).set({ status: 'superseded' })
+      .where(and(eq(deployments.appId, appId), eq(deployments.status, 'live'), ne(deployments.id, d.id))).returning({ id: deployments.id });
     // A queued/processing deployment of the same commit would violate the active-commit unique index; its
     // job then no-ops (processDeployment only claims queued/processing rows, and re-checks before switching).
     if (d.commitSha) {
@@ -180,6 +221,12 @@ export async function rollback(
     }
     await tx.update(deployments).set({ status: 'live' }).where(eq(deployments.id, d.id));
     await tx.update(apps).set({ activeDeploymentId: d.id, rolledBackAt: sql`now()` }).where(eq(apps.id, appId));
-    return { ok: true as const };
+    return { ok: true as const, stop: old.map((r) => r.id) };
   });
+  if ('error' in switched) {
+    if (started && !pre.wasLive && rt) await rt.driver.stopDeployment(appId, deploymentId).catch(() => undefined);
+    return switched;
+  }
+  if (rt) for (const id of switched.stop) await rt.driver.stopDeployment(appId, id).catch((e: unknown) => console.error('stop old deployment failed', appId, id, e));
+  return { ok: true };
 }
