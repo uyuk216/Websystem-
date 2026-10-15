@@ -133,7 +133,7 @@ describe.skipIf(!available)('DockerDriver', { timeout: 30_000 }, () => {
     expect(await driver.status(A)).toBe('stopped');
   });
 
-  it('ys-apps disables inter-container communication', async () => {
+  it('ys-apps disables inter-container communication (with positive control)', async () => {
     const net = await docker.getNetwork(APPS_NETWORK).inspect();
     expect(net.Options?.['com.docker.network.bridge.enable_icc']).toBe('false');
     await driver.start(spec(A));
@@ -141,7 +141,54 @@ describe.skipIf(!available)('DockerDriver', { timeout: 30_000 }, () => {
     const bInfo = await docker.getContainer(`ys-app-${B}-11111111`).inspect();
     const ip = bInfo.NetworkSettings.Networks[APPS_NETWORK]!.IPAddress;
     const r = spawnSync('docker', ['exec', `ys-app-${A}-11111111`, 'wget', '-T', '2', '-qO-', `http://${ip}:8080/`]);
+    expect(r.error).toBeUndefined();
+    expect(r.status).not.toBeNull();
     expect(r.status).not.toBe(0);
+
+    // Positive control: the same request succeeds on an ICC-enabled network.
+    const NET = 'ys-test-icc';
+    spawnSync('docker', ['network', 'rm', NET]);
+    execFileSync('docker', ['network', 'create', NET]);
+    try {
+      execFileSync('docker', ['run', '-d', '--rm', '--name', 'ys-test-icc-b', '--network', NET, '-e', 'PORT=8080', IMAGE]);
+      execFileSync('docker', ['run', '-d', '--rm', '--name', 'ys-test-icc-a', '--network', NET, '-e', 'PORT=8080', IMAGE]);
+      const bIp = execFileSync('docker', ['inspect', '-f', `{{(index .NetworkSettings.Networks "${NET}").IPAddress}}`, 'ys-test-icc-b']).toString().trim();
+      let ok = false;
+      for (let i = 0; i < 15 && !ok; i++) {
+        ok = spawnSync('docker', ['exec', 'ys-test-icc-a', 'wget', '-T', '2', '-qO-', `http://${bIp}:8080/`]).status === 0;
+        if (!ok) await new Promise((r2) => setTimeout(r2, 300));
+      }
+      expect(ok).toBe(true);
+    } finally {
+      spawnSync('docker', ['rm', '-f', 'ys-test-icc-a', 'ys-test-icc-b']);
+      spawnSync('docker', ['network', 'rm', NET]);
+    }
+  });
+
+  it('start is idempotent for a running deployment and recreates a stopped one', async () => {
+    const h1 = await driver.start(spec(A));
+    const h2 = await driver.start(spec(A));
+    expect(h2.containerId).toBe(h1.containerId);
+    execFileSync('docker', ['stop', '-t', '1', h1.containerId]);
+    const h3 = await driver.start(spec(A));
+    expect(h3.containerId).not.toBe(h1.containerId);
+    expect(await driver.status(A, D1)).toBe('running');
+  });
+
+  it('migrates an ICC-enabled ys-apps network and removes legacy containers', async () => {
+    await driver.stop(A);
+    spawnSync('docker', ['network', 'rm', APPS_NETWORK]);
+    execFileSync('docker', ['network', 'create', APPS_NETWORK]);
+    execFileSync('docker', ['run', '-d', '--name', `ys-app-${A}-11111111`, '--network', APPS_NETWORK, IMAGE]);
+    execFileSync('docker', ['run', '-d', '--name', `ys-app-${A}`, IMAGE]); // legacy name
+    const fresh = new DockerDriver({ runtime: undefined, warn: () => {} });
+    await fresh.start(spec(B));
+    const net = await docker.getNetwork(APPS_NETWORK).inspect();
+    expect(net.Options?.['com.docker.network.bridge.enable_icc']).toBe('false');
+    const names = (await docker.listContainers({ all: true })).flatMap((c) => c.Names);
+    expect(names).not.toContain(`/ys-app-${A}`);
+    expect(names).not.toContain(`/ys-app-${A}-11111111`);
+    expect(await fresh.status(B)).toBe('running');
   });
 
   it('removes the partial container when start fails', async () => {

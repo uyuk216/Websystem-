@@ -17,6 +17,7 @@ export const containerName = (appId: string, deploymentId: string): string => {
   assertUuid(deploymentId, 'deploymentId');
   return `ys-app-${appId}-${deploymentId.slice(0, 8)}`;
 };
+const LEGACY_NAME = /^ys-app-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ICC_OPTION = 'com.docker.network.bridge.enable_icc';
 
 export class DockerDriver implements RuntimeDriver {
@@ -38,16 +39,33 @@ export class DockerDriver implements RuntimeDriver {
     await this.docker.getImage(image).inspect();
   }
 
+  /** Removes ys-app-* containers (matching `pred`) so the network can be recreated. */
+  private async removeContainers(pred: (name: string) => boolean): Promise<void> {
+    const list = await this.docker.listContainers({ all: true });
+    const victims = list.filter((c) => c.Names.some((n) => pred(n.replace(/^\//, ''))));
+    await Promise.all(victims.map((c) => this.remove(c.Id)));
+  }
+
   private ensureNetwork(): Promise<void> {
     this.networkReady ??= (async () => {
+      // Legacy containers named ys-app-<appId> (no deployment suffix) are removed.
+      await this.removeContainers((n) => LEGACY_NAME.test(n));
       const existing = (await this.docker.listNetworks({ filters: { name: [APPS_NETWORK] } })).find(
         (n) => n.Name === APPS_NETWORK,
       );
       if (existing) {
-        const info = await this.docker.getNetwork(existing.Id).inspect();
+        const net = this.docker.getNetwork(existing.Id);
+        const info = await net.inspect();
         if (info.Options?.[ICC_OPTION] === 'false') return;
-        // Created without ICC isolation: recreate (fails if containers are still attached).
-        await this.docker.getNetwork(existing.Id).remove();
+        try {
+          // Attached app containers are stopped; rollout restarts them on the new network.
+          await this.removeContainers((n) => n.startsWith('ys-app-'));
+          await net.remove();
+        } catch (err) {
+          throw new Error(`failed to migrate network ${APPS_NETWORK} to enable_icc=false: ${(err as Error).message}`, {
+            cause: err,
+          });
+        }
       }
       try {
         await this.docker.createNetwork({
@@ -71,6 +89,13 @@ export class DockerDriver implements RuntimeDriver {
     assertUuid(spec.ownerId, 'ownerId');
     const name = containerName(spec.appId, spec.deploymentId);
     await this.docker.getImage(spec.image).inspect();
+    const existing = (await this.find(spec.appId, spec.deploymentId))[0];
+    if (existing) {
+      if (existing.State === 'running') {
+        return { appId: spec.appId, deploymentId: spec.deploymentId, containerId: existing.Id };
+      }
+      await this.remove(existing.Id);
+    }
     const port = `${spec.port}/tcp`;
     const env = { ...spec.env, PORT: String(spec.port) };
     const container = await this.docker.createContainer({
@@ -123,12 +148,25 @@ export class DockerDriver implements RuntimeDriver {
     } catch (err) {
       const code = (err as { statusCode?: number }).statusCode;
       if (code === 404) return;
-      if (code !== 304) throw err;
+      if (code !== 304 && code !== 409) throw err;
     }
     try {
       await container.remove({ force: true });
     } catch (err) {
-      if ((err as { statusCode?: number }).statusCode !== 404) throw err;
+      const code = (err as { statusCode?: number }).statusCode;
+      if (code === 409) {
+        // Removal already in progress (e.g. concurrent stop): wait until the container is gone.
+        for (let i = 0; i < 50; i++) {
+          try {
+            await container.inspect();
+          } catch (e) {
+            if ((e as { statusCode?: number }).statusCode === 404) return;
+            throw e;
+          }
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      }
+      if (code !== 404) throw err;
     }
   }
 
