@@ -10,6 +10,12 @@ import { recordLogin, listLoginEvents } from '../auth/login-history.js';
 import { startPasskeyRegistration, finishPasskeyRegistration, startPasskeyLogin, finishPasskeyLogin } from '../auth/passkeys.js';
 import { acceptInvite, changeRole, createTeam, deleteTeam, getTeam, inviteMember, leaveTeam, listTeams, removeMember, transferOwnership } from '../teams/teams.js';
 import { UUID } from '../auth/cross-device.js';
+import Busboy from 'busboy';
+import { Readable } from 'node:stream';
+import { bodyLimit } from 'hono/body-limit';
+import { JOBS, type Storage } from 'platform';
+import { STATIC_LIMITS } from 'shared';
+import { createDeployment, listDeployments, rollback, type JobQueue } from '../apps/deployments.js';
 import { createApp as createAppRecord, deleteApp, getApp, listApps, updateApp } from '../apps/apps.js';
 import { createSession, listSessions, revokeSession } from '../auth/sessions.js';
 import { randomBytes } from 'node:crypto';
@@ -34,6 +40,9 @@ export interface AppDeps {
   mailer: Mailer;
   config: RecoveryRequestConfig & { emailEncKey: Buffer; appOrigin: string; rpId: string };
   trustedProxyHops?: number;
+  /** Object storage and job queue; deployment routes and storage cleanup are enabled when both are given. */
+  storage?: Storage;
+  queue?: JobQueue;
 }
 
 /** Client IP: the socket address, or with N trusted proxy hops the Nth X-Forwarded-For entry from the right. */
@@ -257,9 +266,52 @@ export function createApp(deps?: AppDeps): Hono {
       return 'error' in r ? c.json({ error: r.error }, appStatus[r.error]) : c.json(r);
     });
     app.delete('/apps/:id', session, async (c) => {
-      const r = await deleteApp(deps.db, c.get('accountId'), c.req.param('id'));
+      const q = deps.queue;
+      const r = await deleteApp(deps.db, c.get('accountId'), c.req.param('id'), {
+        enqueueStorageCleanup: q ? async (id) => { await q.send(JOBS.deleteAppStorage, { appId: id }); } : undefined,
+      });
       return 'error' in r ? c.json({ error: r.error }, appStatus[r.error]) : c.json(r);
     });
+    if (deps.storage && deps.queue) {
+      const storage = deps.storage;
+      const queue = deps.queue;
+      const depStatus = { not_found: 404, forbidden: 403, too_large: 413, invalid: 400, invalid_state: 409 } as const;
+      // Multipart overhead on top of the archive limit; the exact archive size is enforced while streaming.
+      const uploadLimit = bodyLimit({
+        maxSize: STATIC_LIMITS.storageBytes + 1024 * 1024,
+        onError: (c) => c.json({ error: 'too_large' }, 413),
+      });
+      app.post('/apps/:id/deployments', session, uploadLimit, async (c) => {
+        const ct = c.req.header('content-type') ?? '';
+        if (!/^multipart\/form-data/i.test(ct) || !c.req.raw.body) return c.json({ error: 'invalid' }, 400);
+        // Take the first part named "file" as a stream; it is piped to storage without buffering.
+        const upload = await new Promise<{ filename: string; file: Readable } | null>((resolve) => {
+          let bb: Busboy.Busboy;
+          try { bb = Busboy({ headers: { 'content-type': ct }, limits: { files: 1, parts: 20 } }); } catch { resolve(null); return; }
+          bb.on('file', (name, file, info) => {
+            if (name !== 'file') { file.resume(); return; }
+            resolve({ filename: info.filename ?? '', file });
+          });
+          bb.on('error', () => resolve(null));
+          bb.on('close', () => resolve(null));
+          Readable.fromWeb(c.req.raw.body as never).on('error', () => bb.destroy()).pipe(bb);
+        });
+        if (!upload) return c.json({ error: 'invalid' }, 400);
+        if (!/\.zip$/i.test(upload.filename)) { upload.file.destroy(); return c.json({ error: 'invalid_type' }, 400); }
+        const r = await createDeployment(deps.db, storage, queue, c.get('accountId'), c.req.param('id'), { source: 'upload', archive: upload.file, format: 'zip' });
+        if ('error' in r) { upload.file.destroy(); return c.json({ error: r.error }, depStatus[r.error]); }
+        return c.json(r, 201);
+      });
+      app.get('/apps/:id/deployments', session, async (c) => {
+        const a = await getApp(deps.db, c.get('accountId'), c.req.param('id'));
+        if (!a) return c.json({ error: 'not_found' }, 404);
+        return c.json({ deployments: await listDeployments(deps.db, c.get('accountId'), a.id) });
+      });
+      app.post('/apps/:id/deployments/:did/rollback', session, async (c) => {
+        const r = await rollback(deps.db, c.get('accountId'), c.req.param('id'), c.req.param('did'));
+        return 'error' in r ? c.json({ error: r.error }, depStatus[r.error]) : c.json(r);
+      });
+    }
     app.post('/auth/logout', session, async (c) => {
       await revokeSession(deps.db, c.get('accountId'), c.get('sessionId'));
       clearSessionCookie(c);

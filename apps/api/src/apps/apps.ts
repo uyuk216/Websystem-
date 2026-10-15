@@ -1,6 +1,6 @@
 import { and, count, desc, eq } from 'drizzle-orm';
 import { STATIC_LIMITS, can, validateAppName, type TeamRole } from 'shared';
-import { withAccount, type Db } from '../db/client.js';
+import { withAccount, type Db, type Tx } from '../db/client.js';
 import { apps, owners, teamMembers } from '../db/schema.js';
 import { UUID } from '../auth/cross-device.js';
 
@@ -56,7 +56,7 @@ export async function getApp(db: Db, accountId: string, appId: string) {
 }
 
 /** Team members need `deploy` to change settings (role check shared with create/delete). */
-async function mayManage(tx: Parameters<Parameters<typeof withAccount>[2]>[0], accountId: string, ownerId: string): Promise<boolean> {
+export async function mayManage(tx: Tx, accountId: string, ownerId: string): Promise<boolean> {
   const [o] = await tx.select().from(owners).where(eq(owners.id, ownerId));
   if (!o) return false;
   if (o.kind === 'account') return o.accountId === accountId;

@@ -1,5 +1,6 @@
 import {
   CreateBucketCommand,
+  DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
@@ -61,6 +62,8 @@ export interface BucketStorage {
   get(key: string): Promise<StoredObject | null>;
   head(key: string): Promise<ObjectHead | null>;
   list(prefix: string): Promise<ListedObject[]>;
+  /** Deletes one object (no error when it does not exist). */
+  delete(key: string): Promise<void>;
   deletePrefix(prefix: string): Promise<number>;
 }
 
@@ -111,6 +114,9 @@ function bucketStorage(s3: S3Client, Bucket: string): BucketStorage {
         ContinuationToken = r.IsTruncated ? r.NextContinuationToken : undefined;
       } while (ContinuationToken);
       return out;
+    },
+    async delete(Key) {
+      await s3.send(new DeleteObjectCommand({ Bucket, Key }));
     },
     async deletePrefix(prefix) {
       if (!prefix.endsWith('/')) throw new Error('deletePrefix requires a prefix ending with "/"');

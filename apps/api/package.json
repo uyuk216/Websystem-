@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/server.ts"
+    ".": "./src/server.ts",
+    "./db": "./src/db/client.ts",
+    "./deployments": "./src/apps/deployments.ts",
+    "./publish": "./src/ingest/publish.ts"
   },
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/server.ts",
@@ -22,6 +25,7 @@
     "@hono/node-server": "^2.1.5",
     "@node-rs/argon2": "^2.2.2",
     "@simplewebauthn/server": "^14.0.3",
+    "busboy": "^1.6.0",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",
     "i18n": "workspace:*",
@@ -31,6 +35,7 @@
     "shared": "workspace:*"
   },
   "devDependencies": {
+    "@types/busboy": "^1.5.5",
     "@types/node": "^26.6.5",
     "@types/nodemailer": "^8.0.2",
     "drizzle-kit": "^0.31.11",
