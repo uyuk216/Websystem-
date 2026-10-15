@@ -1,14 +1,10 @@
 import { eq, sql } from 'drizzle-orm';
-import {
-  ArchiveError, BUCKETS, JOBS, MAX_SCAN_BYTES, appPrefix, extractArchive, findExecutables, scanSecrets,
-  type ArchiveFormat, type Finding, type Storage,
-} from 'platform';
-import { STATIC_LIMITS } from 'shared';
+import { ArchiveError, BUCKETS, JOBS, appPrefix, extractArchive, type ArchiveFormat, type Storage } from 'platform';
 import { UUID } from '../auth/cross-device.js';
 import { withSystem, type Db } from '../db/client.js';
 import { apps, deployments } from '../db/schema.js';
-
-const LIMITS = { maxTotalBytes: STATIC_LIMITS.storageBytes, maxFileBytes: STATIC_LIMITS.fileBytes } as const;
+import { processDynamicDeployment } from './dynamic.js';
+import { LIMITS, entryPath, inspect, relativeToPublishDir } from './inspect.js';
 
 const MIME: Record<string, string> = {
   html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8', css: 'text/css; charset=utf-8',
@@ -18,57 +14,6 @@ const MIME: Record<string, string> = {
   xml: 'application/xml', wasm: 'application/wasm', mp4: 'video/mp4', webm: 'video/webm', mp3: 'audio/mpeg',
 };
 const contentType = (path: string): string => MIME[path.slice(path.lastIndexOf('.') + 1).toLowerCase()] ?? 'application/octet-stream';
-
-/** Resolves an archive path against publishDir. Null when the entry lies outside the publish folder. */
-function relativeToPublishDir(path: string, publishDir: string): string | null {
-  if (publishDir === '') return path;
-  const prefix = `${publishDir}/`;
-  return path.startsWith(prefix) && path.length > prefix.length ? path.slice(prefix.length) : null;
-}
-
-/** GitHub tarballs wrap everything in `<owner>-<repo>-<sha>/`; drops that first segment (null for entries outside it). */
-function stripTopDir(path: string): string | null {
-  const i = path.indexOf('/');
-  return i > 0 && i < path.length - 1 ? path.slice(i + 1) : null;
-}
-
-/** Path of an archive entry as the site sees it, before publishDir is applied. */
-const entryPath = (path: string, stripTop: boolean): string | null => (stripTop ? stripTopDir(path) : path);
-
-type Outcome =
-  | { kind: 'ready'; files: number; bytes: number }
-  | { kind: 'blocked'; findings: Finding[] }
-  | { kind: 'held' }
-  | { kind: 'failed'; message: string };
-
-/** Pass 1: extract and inspect only. Nothing is written to the sites bucket. */
-async function inspect(storage: Storage, sourceKey: string, format: ArchiveFormat, publishDir: string, stripTop: boolean): Promise<Outcome> {
-  const src = await storage.sources.get(sourceKey);
-  if (!src) return { kind: 'failed', message: 'deploy.error.source_missing' };
-  const findings: Finding[] = [];
-  const kept: string[] = [];
-  let bytes = 0;
-  for await (const e of extractArchive(src.body, format, LIMITS)) {
-    // extractArchive already drops always-excluded paths. It sees the full path, so a publishDir such as
-    // ".git" or "node_modules/x" leaves nothing to publish.
-    const inner = entryPath(e.path, stripTop);
-    const rel = inner === null ? null : relativeToPublishDir(inner, publishDir);
-    if (rel === null) continue;
-    kept.push(rel);
-    const chunks: Buffer[] = [];
-    let n = 0;
-    for await (const c of e.open() as AsyncIterable<Buffer>) {
-      if (n <= MAX_SCAN_BYTES) chunks.push(c);
-      n += c.length;
-    }
-    bytes += n;
-    if (n <= MAX_SCAN_BYTES) findings.push(...scanSecrets(rel, Buffer.concat(chunks)));
-  }
-  if (kept.length === 0) return { kind: 'failed', message: 'deploy.error.empty' };
-  if (findings.length) return { kind: 'blocked', findings };
-  if (findExecutables(kept).length) return { kind: 'held' };
-  return { kind: 'ready', files: kept.length, bytes };
-}
 
 /** Pass 2: copy the publish folder to sites/<appId>/<deploymentId>/. */
 async function publishFiles(storage: Storage, sourceKey: string, format: ArchiveFormat, publishDir: string, siteKey: string, stripTop: boolean): Promise<void> {
@@ -92,10 +37,10 @@ export async function processDeployment(
 ): Promise<void> {
   if (!UUID.test(deploymentId)) return;
   const claimed = await withSystem(db, async (tx) => {
-    const rows = await tx.execute<{ app_id: string; source_key: string; publish_dir: string; source: string }>(sql`
+    const rows = await tx.execute<{ app_id: string; source_key: string; publish_dir: string; source: string; kind: string }>(sql`
       UPDATE deployments d SET status = 'processing'
       FROM apps a WHERE d.id = ${deploymentId} AND a.id = d.app_id AND d.status IN ('queued', 'processing')
-      RETURNING d.app_id, d.source_key, d.source, a.publish_dir`);
+      RETURNING d.app_id, d.source_key, d.source, a.publish_dir, a.kind`);
     return rows[0] ?? null;
   });
   if (!claimed) return;
@@ -110,6 +55,11 @@ export async function processDeployment(
   });
 
   try {
+    if (claimed.kind === 'dynamic') {
+      return await processDynamicDeployment(db, storage, {
+        deploymentId, appId, sourceKey, format, stripTop, publishDir: claimed.publish_dir,
+      });
+    }
     const out = await inspect(storage, sourceKey, format, claimed.publish_dir, stripTop);
     if (out.kind === 'failed') return await finish({ status: 'failed', message: out.message });
     if (out.kind === 'blocked') {

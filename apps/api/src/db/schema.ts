@@ -152,7 +152,7 @@ export const apps = pgTable('apps', {
   id: id(),
   ownerId: uuid('owner_id').notNull().references(() => owners.id),
   name: text('name').notNull().unique(),
-  kind: text('kind', { enum: ['static'] }).notNull().default('static'),
+  kind: text('kind', { enum: ['static', 'dynamic'] }).notNull().default('static'),
   publishDir: text('publish_dir').notNull().default(''),
   activeDeploymentId: uuid('active_deployment_id'),
   /** Set by rollback: deployments created before this moment may no longer go live. */
@@ -168,10 +168,14 @@ export const deployments = pgTable('deployments', {
   appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
   source: text('source', { enum: ['upload', 'cli', 'github'] }).notNull(),
   status: text('status', {
-    enum: ['queued', 'processing', 'live', 'superseded', 'failed', 'blocked_secret', 'held_for_review'],
+    enum: ['queued', 'processing', 'live', 'superseded', 'failed', 'blocked_secret', 'held_for_review', 'built'],
   }).notNull().default('queued'),
   sourceKey: text('source_key').notNull(),
   siteKey: text('site_key'),
+  /** Dynamic apps: image built for this deployment (`ys/<appId>:<deploymentId>`). */
+  imageRef: text('image_ref'),
+  /** Dynamic apps: key of the build log in the sources bucket. */
+  buildLogKey: text('build_log_key'),
   totalBytes: bigint('total_bytes', { mode: 'number' }),
   fileCount: integer('file_count'),
   message: text('message'),
