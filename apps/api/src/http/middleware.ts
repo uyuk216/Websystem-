@@ -2,6 +2,7 @@ import type { Context, MiddlewareHandler } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { Db } from '../db/client.js';
 import { resolveSession } from '../auth/sessions.js';
+import { resolveApiToken } from '../apps/api-tokens.js';
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -21,8 +22,21 @@ export function clearSessionCookie(c: Context): void {
   deleteCookie(c, SESSION_COOKIE, { path: '/', secure: true });
 }
 
-export function requireSession(db: Db): MiddlewareHandler {
+/**
+ * Resolves the account from the session cookie or, unless `bearer: false`, from `Authorization: Bearer ysk_...`.
+ * Bearer requests get sessionId '' (they have no session). Routes that manage credentials must pass `bearer: false`.
+ */
+export function requireSession(db: Db, opts: { bearer?: boolean } = {}): MiddlewareHandler {
+  const bearer = opts.bearer ?? true;
   return async (c, next) => {
+    const auth = c.req.header('authorization');
+    if (bearer && auth && /^Bearer /i.test(auth)) {
+      const t = await resolveApiToken(db, auth.slice(7).trim());
+      if (!t) return c.json({ error: 'unauthorized' }, 401);
+      c.set('accountId', t.accountId);
+      c.set('sessionId', '');
+      return next();
+    }
     const token = getCookie(c, SESSION_COOKIE);
     const s = token ? await resolveSession(db, token) : null;
     if (!s) return c.json({ error: 'unauthorized' }, 401);

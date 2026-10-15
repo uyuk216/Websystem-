@@ -30,6 +30,17 @@ export const sessions = pgTable('sessions', {
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
 });
 
+export const apiTokens = pgTable('api_tokens', {
+  id: id(),
+  accountId: uuid('account_id').notNull().references(() => accounts.id),
+  name: text('name').notNull(),
+  tokenHash: text('token_hash').notNull().unique(),
+  prefix: text('prefix').notNull(),
+  createdAt: createdAt(),
+  lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+});
+
 export const emailChallenges = pgTable('email_challenges', {
   id: id(),
   accountId: uuid('account_id').references(() => accounts.id),

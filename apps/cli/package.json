@@ -1,0 +1,22 @@
+{
+  "name": "cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": { "yourservice": "./bin/yourservice.mjs" },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "ignore": "^7.0.5",
+    "tsx": "^4.23.15",
+    "yazl": "^3.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/yazl": "^3.3.0",
+    "vitest": "^4.1.11"
+  }
+}

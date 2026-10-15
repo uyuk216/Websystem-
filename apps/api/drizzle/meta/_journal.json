@@ -71,6 +71,13 @@
       "when": 1792073142224,
       "tag": "0009_dry_lady_deathstrike",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792073709866,
+      "tag": "0010_api_tokens",
+      "breakpoints": true
     }
   ]
 }

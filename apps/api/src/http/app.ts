@@ -17,6 +17,7 @@ import { JOBS, type Storage } from 'platform';
 import { STATIC_LIMITS } from 'shared';
 import { createDeployment, listDeployments, rollback, type JobQueue } from '../apps/deployments.js';
 import { createApp as createAppRecord, deleteApp, getApp, listApps, updateApp } from '../apps/apps.js';
+import { createApiToken, listApiTokens, revokeApiToken } from '../apps/api-tokens.js';
 import { createSession, listSessions, revokeSession } from '../auth/sessions.js';
 import { randomBytes } from 'node:crypto';
 import { getCookie, setCookie } from 'hono/cookie';
@@ -179,8 +180,10 @@ export function createApp(deps?: AppDeps): Hono {
       return c.json({ ok: true, recoveryCode: r.recoveryCode });
     });
     const session = requireSession(deps.db);
-    app.post('/auth/passkey/register/start', session, async (c) => c.json(await startPasskeyRegistration(deps.db, c.get('accountId'), deps.config)));
-    app.post('/auth/passkey/register/finish', session, attemptLimit, async (c) => {
+    // Credential management and account-security routes: session cookie only, never an API token.
+    const cookieSession = requireSession(deps.db, { bearer: false });
+    app.post('/auth/passkey/register/start', cookieSession, async (c) => c.json(await startPasskeyRegistration(deps.db, c.get('accountId'), deps.config)));
+    app.post('/auth/passkey/register/finish', cookieSession, attemptLimit, async (c) => {
       const b = await c.req.json().catch(() => null) as Record<string, unknown> | null;
       if (!str(b?.challengeId, 64) || typeof b.response !== 'object' || b.response === null) return c.json({ error: 'invalid' }, 400);
       const r = await finishPasskeyRegistration(deps.db, c.get('accountId'), { challengeId: b.challengeId, response: b.response as never }, deps.config);
@@ -312,22 +315,32 @@ export function createApp(deps?: AppDeps): Hono {
         return 'error' in r ? c.json({ error: r.error }, depStatus[r.error]) : c.json(r);
       });
     }
-    app.post('/auth/logout', session, async (c) => {
+    app.get('/me/tokens', cookieSession, async (c) => c.json({ tokens: await listApiTokens(deps.db, c.get('accountId')) }));
+    app.post('/me/tokens', cookieSession, async (c) => {
+      const b = await jsonBody(c);
+      if (!str(b?.name, 100) || !b.name.trim()) return c.json({ error: 'invalid' }, 400);
+      return c.json(await createApiToken(deps.db, c.get('accountId'), b.name.trim()), 201);
+    });
+    app.delete('/me/tokens/:id', cookieSession, async (c) => {
+      if (!UUID.test(c.req.param('id'))) return c.json({ error: 'invalid' }, 400);
+      return (await revokeApiToken(deps.db, c.get('accountId'), c.req.param('id'))) ? c.json({ ok: true }) : c.json({ error: 'not_found' }, 404);
+    });
+    app.post('/auth/logout', cookieSession, async (c) => {
       await revokeSession(deps.db, c.get('accountId'), c.get('sessionId'));
       clearSessionCookie(c);
       return c.json({ ok: true });
     });
-    app.get('/me/sessions', session, async (c) => {
+    app.get('/me/sessions', cookieSession, async (c) => {
       const current = c.get('sessionId');
       const rows = await listSessions(deps.db, c.get('accountId'));
       return c.json({ sessions: rows.map((r) => ({ ...r, current: r.id === current })) });
     });
-    app.delete('/me/sessions/:id', session, async (c) => {
+    app.delete('/me/sessions/:id', cookieSession, async (c) => {
       if (!UUID.test(c.req.param('id'))) return c.json({ error: 'invalid' }, 400);
       await revokeSession(deps.db, c.get('accountId'), c.req.param('id'));
       return c.json({ ok: true });
     });
-    app.get('/me/logins', session, async (c) => c.json({ events: await listLoginEvents(deps.db, c.get('accountId')) }));
+    app.get('/me/logins', cookieSession, async (c) => c.json({ events: await listLoginEvents(deps.db, c.get('accountId')) }));
   }
   return app;
 }
