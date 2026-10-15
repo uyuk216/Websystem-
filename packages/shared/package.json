@@ -12,6 +12,7 @@
     "lint": "eslint ."
   },
   "devDependencies": {
-    "vitest": "^3.0.0"
+    "@types/node": "^26.6.5",
+    "vitest": "^4.1.11"
   }
 }
