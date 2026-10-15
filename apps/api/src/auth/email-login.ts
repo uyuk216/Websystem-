@@ -29,7 +29,7 @@ const newCode = (): string => String(randomInt(0, 1_000_000)).padStart(6, '0');
 export async function startEmailChallenge(
   db: Db,
   mailer: Mailer,
-  input: { email: string; purpose: 'login' | 'signup'; locale: Locale; requesterDeviceId: string },
+  input: { email: string; purpose: 'login' | 'signup'; locale: Locale; requesterDeviceId: string; requesterDeviceLabel?: string },
   cfg: EmailLoginConfig,
 ): Promise<{ challengeId: string } | { error: 'rate_limited' }> {
   const email = normalizeEmail(input.email);
@@ -53,6 +53,7 @@ export async function startEmailChallenge(
       codeHash: sha256Hex(code),
       linkTokenHash: sha256Hex(token),
       requesterDeviceId: input.requesterDeviceId,
+      requesterDeviceLabel: input.requesterDeviceLabel ?? null,
       expiresAt: new Date(Date.now() + CHALLENGE_TTL_MS),
     }).returning({ id: emailChallenges.id });
     return c!.id;

@@ -43,6 +43,9 @@ export const emailChallenges = pgTable('email_challenges', {
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   crossDeviceNumber: integer('cross_device_number'),
   crossDeviceState: text('cross_device_state'),
+  scanToken: text('scan_token'),
+  approvedAt: timestamp('approved_at', { withTimezone: true }),
+  requesterDeviceLabel: text('requester_device_label'),
 });
 
 export const passkeys = pgTable('passkeys', {
