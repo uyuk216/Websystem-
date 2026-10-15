@@ -59,12 +59,15 @@ export async function startEmailChallenge(
   });
   if (!challengeId) return { error: 'rate_limited' };
 
+  // Fire-and-forget so latency does not reveal whether a mail was sent (account existence).
+  let mail: Promise<void> | null = null;
   if (input.purpose === 'signup' && account) {
-    await mailer.sendMail(email, t(input.locale, 'login.existsSubject'), t(input.locale, 'login.existsBody', { origin: cfg.appOrigin }));
-  } else if (input.purpose === 'login' ? account : true) {
+    mail = mailer.sendMail(email, t(input.locale, 'login.existsSubject'), t(input.locale, 'login.existsBody', { origin: cfg.appOrigin }));
+  } else if (input.purpose === 'signup' || account) {
     const link = `${cfg.appOrigin}/login/link?c=${challengeId}&t=${token}`;
-    await mailer.sendMail(email, t(input.locale, 'login.mailSubject'), t(input.locale, 'login.mailBody', { code, link }));
+    mail = mailer.sendMail(email, t(input.locale, 'login.mailSubject'), t(input.locale, 'login.mailBody', { code, link }));
   }
+  mail?.catch((err: unknown) => console.error('email challenge mail failed', err));
   return { challengeId };
 }
 

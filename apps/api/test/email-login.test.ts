@@ -85,8 +85,9 @@ describe('signup', () => {
       const mail = createFakeMailer();
       const r = await start(db, mail, 'new@example.com', 'signup');
       if (!('challengeId' in r)) throw new Error('rate');
-      const s = { ...base, email: 'new@example.com', challengeId: r.challengeId, code: mail.lastCode() };
+      const s = { ...base, requesterDeviceId: 'd1', email: 'new@example.com', challengeId: r.challengeId, code: mail.lastCode() };
       expect(await registerAccount(db, { ...s, birthDate: '2015-01-01' }, cfg)).toEqual({ error: 'under13' });
+      expect(await registerAccount(db, { ...s, requesterDeviceId: 'other', birthDate: '2008-04-02' }, cfg)).toEqual({ error: 'invalid' });
       expect(await registerAccount(db, { ...s, code: '000000', birthDate: '2008-04-02' }, cfg)).toEqual({ error: 'invalid' });
       const ok = await registerAccount(db, { ...s, birthDate: '2008-04-02' }, cfg);
       expect(ok).toHaveProperty('recoveryCode');
@@ -102,6 +103,16 @@ describe('signup', () => {
       expect(await start(db, mail, 'foo@example.com', 'signup')).toHaveProperty('challengeId');
       expect(mail.sentTo('foo@example.com')).toBe(1);
       expect(mail.lastCode()).toBe('');
+    });
+  });
+});
+
+describe('mail dispatch', () => {
+  it('resolves without waiting for a slow mailer', async () => {
+    await withTestDb(async (db) => {
+      await mkAccount(db, 'foo@example.com');
+      const slow = { sendMail: () => new Promise<void>(() => {}) };
+      expect(await start(db, slow as never, 'foo@example.com')).toHaveProperty('challengeId');
     });
   });
 });
