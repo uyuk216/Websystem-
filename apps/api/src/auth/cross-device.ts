@@ -4,7 +4,7 @@ import type { Db } from '../db/client.js';
 import { emailChallenges } from '../db/schema.js';
 import { hashesEqual, sha256Hex } from './email-login.js';
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 type Tx = Pick<Db, 'select' | 'update'>;
 type Row = typeof emailChallenges.$inferSelect;
 

@@ -9,7 +9,7 @@ import { startEmailChallenge, verifyEmailCode } from '../src/auth/email-login.js
 import { registerAccount } from '../src/auth/accounts.js';
 import { createApp, type AppDeps } from '../src/http/app.js';
 
-const cfg = { emailEncKey: Buffer.alloc(32, 1), emailHashKey: Buffer.alloc(32, 2), adminEmail: 'admin@example.com', appOrigin: 'https://app.example.com' };
+const cfg = { emailEncKey: Buffer.alloc(32, 1), emailHashKey: Buffer.alloc(32, 2), adminEmail: 'admin@example.com', appOrigin: 'https://app.example.com', rpId: 'app.example.com' };
 
 async function mkAccount(db: TestDb, email: string) {
   const n = normalizeEmail(email);

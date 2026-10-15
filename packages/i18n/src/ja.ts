@@ -11,4 +11,6 @@ export const ja = {
   'recovery.adminBody': '復旧申請が届きました。申請 ID: {requestId}\n確認後、pnpm --filter api admin:approve-recovery {requestId} を実行してください。',
   'recovery.approvedSubject': '復旧申請が承認されました',
   'recovery.approvedBody': '復旧申請が承認されました。以前のログイン状態とパスキーはすべて無効になりました。メールアドレスでログインし、パスキーを設定し直してください。新しい復旧コードは管理者から別の方法でお渡しします。',
+  'login.newDeviceSubject': '新しい端末からのログイン',
+  'login.newDeviceBody': '新しい端末からアカウントにログインがありました。\n端末: {device}\n日時: {time}\n\n心当たりがない場合は、ログイン中の端末とパスキーを確認し、必要に応じてアカウントの復旧を行ってください。',
 } as const;

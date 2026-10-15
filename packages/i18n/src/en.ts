@@ -13,4 +13,6 @@ export const en = {
   'recovery.adminBody': 'A recovery request was received. Request ID: {requestId}\nAfter verifying, run: pnpm --filter api admin:approve-recovery {requestId}',
   'recovery.approvedSubject': 'Your recovery request was approved',
   'recovery.approvedBody': 'Your recovery request was approved. All previous sign-ins and passkeys have been revoked. Log in with your email address and set up a passkey again. Your new recovery code will be given to you separately by the administrator.',
+  'login.newDeviceSubject': 'Sign-in from a new device',
+  'login.newDeviceBody': 'Your account was signed in to from a new device.\nDevice: {device}\nTime: {time}\n\nIf this was not you, review your sessions and passkeys, and use account recovery if needed.',
 } satisfies Record<keyof typeof ja, string>;

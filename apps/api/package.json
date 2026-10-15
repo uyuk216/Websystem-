@@ -10,6 +10,7 @@
     "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/server.ts",
     "start": "node --env-file-if-exists=../../.env.development --import tsx src/server.ts",
     "db:generate": "drizzle-kit generate",
+    "admin:purge-login-events": "node --env-file-if-exists=../../.env.development --import tsx src/scripts/purge-login-events.ts",
     "admin:approve-recovery": "node --env-file-if-exists=../../.env.development --import tsx src/scripts/approve-recovery.ts",
     "db:migrate": "node --env-file-if-exists=../../.env.development --import tsx src/db/migrate.ts",
     "test": "vitest run",
@@ -19,6 +20,7 @@
   "dependencies": {
     "@hono/node-server": "^2.1.5",
     "@node-rs/argon2": "^2.2.2",
+    "@simplewebauthn/server": "^14.0.3",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",
     "i18n": "workspace:*",

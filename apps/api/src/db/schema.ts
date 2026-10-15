@@ -65,7 +65,18 @@ export const loginEvents = pgTable('login_events', {
   deviceLabel: text('device_label').notNull(),
   region: text('region'),
   ipPrefix: text('ip_prefix').notNull(),
+  /** SHA-256 hex of the `did` device cookie; used to detect a first login from a device. */
+  deviceKey: text('device_key').notNull(),
   createdAt: createdAt(),
+}, (t) => [index('login_events_account_device_idx').on(t.accountId, t.deviceKey)]);
+
+export const webauthnChallenges = pgTable('webauthn_challenges', {
+  id: id(),
+  accountId: uuid('account_id').references(() => accounts.id),
+  challenge: text('challenge').notNull(),
+  kind: text('kind', { enum: ['register', 'login'] }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
 });
 
 export const recoveryRequests = pgTable('recovery_requests', {
