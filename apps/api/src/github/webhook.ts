@@ -1,9 +1,9 @@
 import type { Readable } from 'node:stream';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { verify } from '@octokit/webhooks-methods';
 import type { Storage } from 'platform';
 import { withSystem, type Db } from '../db/client.js';
-import { apps, deployments, githubDeliveries } from '../db/schema.js';
+import { apps, githubDeliveries } from '../db/schema.js';
 import { createSystemDeployment, type JobQueue } from '../apps/deployments.js';
 import type { GithubClient } from './client.js';
 
@@ -50,27 +50,27 @@ export async function findPushTargets(db: Db, e: PushEvent): Promise<string[]> {
 
 /**
  * Downloads the pushed commit once per app and queues a deployment for it. A failure for one app is logged
- * and does not stop the others. Processing itself happens in the worker.
+ * and does not stop the others. Processing itself happens in the worker. Resolves true when some app failed
+ * unexpectedly (so the caller can release the delivery claim and let GitHub redeliver).
  */
 export async function deployPush(
   db: Db, storage: Storage, queue: JobQueue, client: GithubClient, e: PushEvent, appIds: string[],
-): Promise<void> {
+): Promise<boolean> {
+  let retry = false;
   for (const appId of appIds) {
     try {
-      // A commit that is already queued, being processed or live is not deployed again.
-      const dup = await withSystem(db, (tx) => tx.select({ id: deployments.id }).from(deployments).where(and(
-        eq(deployments.appId, appId), eq(deployments.commitSha, e.after), inArray(deployments.status, ['queued', 'processing', 'live']),
-      )).limit(1));
-      if (dup.length > 0) continue;
+      // Dedupe of an already queued/processing/live commit is atomic in createSystemDeployment.
       const r = await createSystemDeployment(db, storage, queue, appId, {
         source: 'github', format: 'tar.gz', commitSha: e.after,
         fetchArchive: (): Promise<Readable> => client.downloadTarball(e.installationId, e.repo, e.after),
       });
-      if ('error' in r) console.error('github deploy rejected', appId, r.error);
+      if ('error' in r && r.error !== 'duplicate') console.error('github deploy rejected', appId, r.error);
     } catch (err) {
+      retry = true;
       console.error('github deploy failed', appId, err);
     }
   }
+  return retry;
 }
 
 /** Records a webhook delivery id. False when it was already seen (a replay or redelivery). */
@@ -78,4 +78,9 @@ export async function claimDelivery(db: Db, deliveryId: string): Promise<boolean
   const rows = await withSystem(db, (tx) => tx.insert(githubDeliveries).values({ deliveryId })
     .onConflictDoNothing().returning({ id: githubDeliveries.deliveryId }));
   return rows.length > 0;
+}
+
+/** Forgets a delivery id so a redelivery of the same webhook is processed again. */
+export async function releaseDelivery(db: Db, deliveryId: string): Promise<void> {
+  await withSystem(db, (tx) => tx.delete(githubDeliveries).where(eq(githubDeliveries.deliveryId, deliveryId)));
 }

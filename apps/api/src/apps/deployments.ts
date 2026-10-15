@@ -97,16 +97,22 @@ export async function createDeployment(
 export async function createSystemDeployment(
   db: Db, storage: Storage, queue: JobQueue, appId: string,
   input: { source: DeploySource; format: ArchiveFormat; commitSha: string; fetchArchive: () => Promise<Readable> },
-): Promise<{ deploymentId: string } | { error: 'not_found' | 'failed' }> {
+): Promise<{ deploymentId: string } | { error: 'not_found' | 'failed' | 'duplicate' }> {
   if (!UUID.test(appId)) return { error: 'not_found' };
   const deploymentId = randomUUID();
   const sourceKey = `${appPrefix(BUCKETS.sources, appId)}${deploymentId}.${input.format}`;
   const inserted = await withSystem(db, async (tx) => {
     const [a] = await tx.select({ id: apps.id }).from(apps).where(eq(apps.id, appId)).for('share');
     if (!a) return false;
-    await tx.insert(deployments).values({ id: deploymentId, appId, source: input.source, sourceKey, createdBy: null, commitSha: input.commitSha });
-    return true;
+    // The partial unique index (app, commit) over active statuses makes the dedupe atomic.
+    const rows = await tx.insert(deployments).values({ id: deploymentId, appId, source: input.source, sourceKey, createdBy: null, commitSha: input.commitSha })
+      .onConflictDoNothing({
+        target: [deployments.appId, deployments.commitSha],
+        where: sql`${deployments.commitSha} is not null and ${deployments.status} in ('queued', 'processing', 'live')`,
+      }).returning({ id: deployments.id });
+    return rows.length > 0 ? true : 'duplicate' as const;
   });
+  if (inserted === 'duplicate') return { error: 'duplicate' };
   if (!inserted) return { error: 'not_found' };
   const fail = async (message: string) => {
     await storage.sources.delete(sourceKey).catch(() => undefined);

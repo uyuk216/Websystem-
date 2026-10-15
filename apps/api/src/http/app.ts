@@ -18,7 +18,7 @@ import { STATIC_LIMITS } from 'shared';
 import { createDeployment, listDeployments, rollback, type JobQueue } from '../apps/deployments.js';
 import { createApp as createAppRecord, deleteApp, getApp, listApps, listOwners, updateApp } from '../apps/apps.js';
 import { createApiToken, listApiTokens, revokeApiToken } from '../apps/api-tokens.js';
-import { claimDelivery, deployPush, findPushTargets, parsePush, verifyWebhook } from '../github/webhook.js';
+import { claimDelivery, deployPush, findPushTargets, parsePush, releaseDelivery, verifyWebhook } from '../github/webhook.js';
 import { completeConnect, setGithub, startConnect } from '../github/link.js';
 import type { GithubClient } from '../github/client.js';
 import { getUsage } from '../usage/transfer.js';
@@ -352,14 +352,17 @@ export function createApp(deps?: AppDeps): Hono {
         if (c.req.header('x-github-event') !== 'push') return c.json({ ok: true, ignored: true });
         const delivery = c.req.header('x-github-delivery');
         if (delivery && (delivery.length > 100 || !(await claimDelivery(deps.db, delivery)))) return c.json({ ok: true, ignored: true });
+        // If anything fails before deployments exist, forget the claim so GitHub's redelivery is processed.
+        const release = (): Promise<void> => (delivery ? releaseDelivery(deps.db, delivery).catch((err: unknown) => console.error('github release failed', err)) : Promise.resolve());
         let json: unknown;
-        try { json = JSON.parse(raw); } catch { return c.json({ error: 'invalid' }, 400); }
+        try { json = JSON.parse(raw); } catch { await release(); return c.json({ error: 'invalid' }, 400); }
         const e = parsePush(json);
-        if (!e) return c.json({ error: 'invalid' }, 400);
-        const targets = await findPushTargets(deps.db, e);
+        if (!e) { await release(); return c.json({ error: 'invalid' }, 400); }
+        let targets: string[];
+        try { targets = await findPushTargets(deps.db, e); } catch (err) { await release(); throw err; }
         if (targets.length === 0) return c.json({ ok: true, ignored: true });
         // Downloading the tarball can take a while; answer GitHub now and finish in the background.
-        background(deployPush(deps.db, storage, queue, client, e, targets));
+        background(deployPush(deps.db, storage, queue, client, e, targets).then((retry) => (retry ? release() : undefined), (err: unknown) => release().then(() => { throw err; })));
         return c.json({ ok: true, apps: targets.length }, 202);
       });
       // User authorization: proves which installations the signed-in account controls.

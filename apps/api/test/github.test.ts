@@ -1,7 +1,7 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { text } from 'node:stream/consumers';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { createStorage, JOBS, loadStorageConfig, type Storage } from 'platform';
 import { makeTarGz } from '../../../packages/platform/test/ingest/helpers.js';
@@ -266,6 +266,36 @@ describe('github', () => {
     expect(h.downloads).toHaveLength(1);
     await db.update(githubDeliveries).set({ receivedAt: new Date(Date.now() - 8 * 86400_000) }).where(eq(githubDeliveries.deliveryId, 'd1'));
     expect(await purgeGithubState(db, new Date())).toBe(1);
+    await deleteAppStorage(storage, appId);
+  }));
+
+  it('an unexpected failure releases the delivery claim so a redelivery is processed', () => withTestDb(async (db) => {
+    const { appId } = await setup(db);
+    await connect(db, appId);
+    const h = harness(db);
+    let fail = true;
+    const orig = h.jobs.push.bind(h.jobs);
+    h.jobs.push = (...a) => { if (fail) throw new Error('queue down'); return orig(...a); };
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect((await h.push(payload(), { 'x-github-delivery': 'r1' })).status).toBe(202);
+    await Promise.all(h.pending);
+    errSpy.mockRestore();
+    expect(await db.select().from(githubDeliveries).where(eq(githubDeliveries.deliveryId, 'r1'))).toHaveLength(0);
+    fail = false;
+    expect((await h.push(payload(), { 'x-github-delivery': 'r1' })).status).toBe(202);
+    await Promise.all(h.pending);
+    expect((await db.select().from(deployments)).map((r) => r.status).sort()).toEqual(['failed', 'queued']);
+    await deleteAppStorage(storage, appId);
+  }));
+
+  it('concurrent pushes of one commit create exactly one active deployment (unique index)', () => withTestDb(async (db) => {
+    const { appId } = await setup(db);
+    await connect(db, appId);
+    const h = harness(db);
+    const rs = await Promise.all([1, 2, 3, 4].map((i) => h.push(payload(), { 'x-github-delivery': `c${i}` })));
+    expect(rs.every((r) => r.status === 202)).toBe(true);
+    await Promise.all(h.pending);
+    expect(await db.select().from(deployments)).toHaveLength(1);
     await deleteAppStorage(storage, appId);
   }));
 
