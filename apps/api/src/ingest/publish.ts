@@ -26,6 +26,15 @@ function relativeToPublishDir(path: string, publishDir: string): string | null {
   return path.startsWith(prefix) && path.length > prefix.length ? path.slice(prefix.length) : null;
 }
 
+/** GitHub tarballs wrap everything in `<owner>-<repo>-<sha>/`; drops that first segment (null for entries outside it). */
+function stripTopDir(path: string): string | null {
+  const i = path.indexOf('/');
+  return i > 0 && i < path.length - 1 ? path.slice(i + 1) : null;
+}
+
+/** Path of an archive entry as the site sees it, before publishDir is applied. */
+const entryPath = (path: string, stripTop: boolean): string | null => (stripTop ? stripTopDir(path) : path);
+
 type Outcome =
   | { kind: 'ready'; files: number; bytes: number }
   | { kind: 'blocked'; findings: Finding[] }
@@ -33,7 +42,7 @@ type Outcome =
   | { kind: 'failed'; message: string };
 
 /** Pass 1: extract and inspect only. Nothing is written to the sites bucket. */
-async function inspect(storage: Storage, sourceKey: string, format: ArchiveFormat, publishDir: string): Promise<Outcome> {
+async function inspect(storage: Storage, sourceKey: string, format: ArchiveFormat, publishDir: string, stripTop: boolean): Promise<Outcome> {
   const src = await storage.sources.get(sourceKey);
   if (!src) return { kind: 'failed', message: 'deploy.error.source_missing' };
   const findings: Finding[] = [];
@@ -42,7 +51,8 @@ async function inspect(storage: Storage, sourceKey: string, format: ArchiveForma
   for await (const e of extractArchive(src.body, format, LIMITS)) {
     // extractArchive already drops always-excluded paths. It sees the full path, so a publishDir such as
     // ".git" or "node_modules/x" leaves nothing to publish.
-    const rel = relativeToPublishDir(e.path, publishDir);
+    const inner = entryPath(e.path, stripTop);
+    const rel = inner === null ? null : relativeToPublishDir(inner, publishDir);
     if (rel === null) continue;
     kept.push(rel);
     const chunks: Buffer[] = [];
@@ -61,11 +71,12 @@ async function inspect(storage: Storage, sourceKey: string, format: ArchiveForma
 }
 
 /** Pass 2: copy the publish folder to sites/<appId>/<deploymentId>/. */
-async function publishFiles(storage: Storage, sourceKey: string, format: ArchiveFormat, publishDir: string, siteKey: string): Promise<void> {
+async function publishFiles(storage: Storage, sourceKey: string, format: ArchiveFormat, publishDir: string, siteKey: string, stripTop: boolean): Promise<void> {
   const src = await storage.sources.get(sourceKey);
   if (!src) throw new ArchiveError('corrupt');
   for await (const e of extractArchive(src.body, format, LIMITS)) {
-    const rel = relativeToPublishDir(e.path, publishDir);
+    const inner = entryPath(e.path, stripTop);
+    const rel = inner === null ? null : relativeToPublishDir(inner, publishDir);
     if (rel === null) continue;
     await storage.sites.put(`${siteKey}${rel}`, e.open(), contentType(rel));
   }
@@ -81,16 +92,17 @@ export async function processDeployment(
 ): Promise<void> {
   if (!UUID.test(deploymentId)) return;
   const claimed = await withSystem(db, async (tx) => {
-    const rows = await tx.execute<{ app_id: string; source_key: string; publish_dir: string }>(sql`
+    const rows = await tx.execute<{ app_id: string; source_key: string; publish_dir: string; source: string }>(sql`
       UPDATE deployments d SET status = 'processing'
       FROM apps a WHERE d.id = ${deploymentId} AND a.id = d.app_id AND d.status IN ('queued', 'processing')
-      RETURNING d.app_id, d.source_key, a.publish_dir`);
+      RETURNING d.app_id, d.source_key, d.source, a.publish_dir`);
     return rows[0] ?? null;
   });
   if (!claimed) return;
   const appId = claimed.app_id;
   const sourceKey = claimed.source_key;
   const format: ArchiveFormat = sourceKey.endsWith('.tar.gz') ? 'tar.gz' : 'zip';
+  const stripTop = claimed.source === 'github';
   const siteKey = `${appPrefix(BUCKETS.sites, appId)}${deploymentId}/`;
 
   const finish = (set: Partial<typeof deployments.$inferInsert>) => withSystem(db, async (tx) => {
@@ -98,7 +110,7 @@ export async function processDeployment(
   });
 
   try {
-    const out = await inspect(storage, sourceKey, format, claimed.publish_dir);
+    const out = await inspect(storage, sourceKey, format, claimed.publish_dir, stripTop);
     if (out.kind === 'failed') return await finish({ status: 'failed', message: out.message });
     if (out.kind === 'blocked') {
       return await finish({
@@ -108,7 +120,7 @@ export async function processDeployment(
     }
     if (out.kind === 'held') return await finish({ status: 'held_for_review', message: 'deploy.heldForReview' });
 
-    await publishFiles(storage, sourceKey, format, claimed.publish_dir, siteKey);
+    await publishFiles(storage, sourceKey, format, claimed.publish_dir, siteKey, stripTop);
     await withSystem(db, async (tx) => {
       // Serialises with other finishing deployments and with rollbacks of this app.
       const [app] = await tx.select({ id: apps.id, rolledBackAt: apps.rolledBackAt }).from(apps).where(eq(apps.id, appId)).for('update');

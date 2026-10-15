@@ -4,7 +4,7 @@ import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import { BUCKETS, JOBS, appPrefix, type ArchiveFormat, type Storage } from 'platform';
 import { STATIC_LIMITS } from 'shared';
 import { UUID } from '../auth/cross-device.js';
-import { withAccount, type Db } from '../db/client.js';
+import { withAccount, withSystem, type Db, type Tx } from '../db/client.js';
 import { apps, deployments } from '../db/schema.js';
 import { mayManage } from './apps.js';
 
@@ -30,6 +30,46 @@ function capBytes(maxBytes: number): Transform {
   });
 }
 
+async function storeAndQueue(
+  db: Db, storage: Storage, queue: JobQueue, appId: string,
+  input: { source: DeploySource; archive: Readable; format: ArchiveFormat; commitSha?: string },
+  createdBy: string | null,
+  run: <T>(fn: (tx: Tx) => Promise<T>) => Promise<T>,
+  allowed: (tx: Tx, ownerId: string) => Promise<boolean>,
+): Promise<{ deploymentId: string } | { error: CreateDeploymentError }> {
+  const deploymentId = randomUUID();
+  const sourceKey = `${appPrefix(BUCKETS.sources, appId)}${deploymentId}.${input.format}`;
+  const capped = capBytes(STATIC_LIMITS.storageBytes);
+  input.archive.on('error', (e) => capped.destroy(e));
+  input.archive.pipe(capped);
+  try {
+    await storage.sources.put(sourceKey, capped, 'application/octet-stream');
+  } catch (e) {
+    input.archive.destroy();
+    await storage.sources.delete(sourceKey).catch(() => undefined);
+    if (e instanceof TooLarge) return { error: 'too_large' };
+    throw e;
+  }
+  try {
+    const ok = await run(async (tx) => {
+      // The app may have been deleted or permissions changed while the upload streamed.
+      const [a] = await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId)).for('share');
+      if (!a || !(await allowed(tx, a.ownerId))) return false;
+      await tx.insert(deployments).values({
+        id: deploymentId, appId, source: input.source, sourceKey, createdBy, commitSha: input.commitSha ?? null,
+      });
+      return true;
+    });
+    if (!ok) throw new Error('app_gone');
+    await queue.send(JOBS.processDeployment, { deploymentId });
+  } catch (e) {
+    await storage.sources.delete(sourceKey).catch(() => undefined);
+    if (e instanceof Error && e.message === 'app_gone') return { error: 'not_found' };
+    throw e;
+  }
+  return { deploymentId };
+}
+
 /**
  * Stores the uploaded archive at sources/<appId>/<deploymentId>.<ext>, records a `queued` deployment and
  * enqueues processing. The caller needs the `deploy` permission for the app's owner.
@@ -46,37 +86,19 @@ export async function createDeployment(
   });
   if (access !== 'ok') return { error: access };
 
-  const deploymentId = randomUUID();
-  const sourceKey = `${appPrefix(BUCKETS.sources, appId)}${deploymentId}.${input.format}`;
-  const capped = capBytes(STATIC_LIMITS.storageBytes);
-  input.archive.on('error', (e) => capped.destroy(e));
-  input.archive.pipe(capped);
-  try {
-    await storage.sources.put(sourceKey, capped, 'application/octet-stream');
-  } catch (e) {
-    input.archive.destroy();
-    await storage.sources.delete(sourceKey).catch(() => undefined);
-    if (e instanceof TooLarge) return { error: 'too_large' };
-    throw e;
-  }
-  try {
-    const ok = await withAccount(db, accountId, async (tx) => {
-      // The app may have been deleted or permissions changed while the upload streamed.
-      const [a] = await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId)).for('share');
-      if (!a || !(await mayManage(tx, accountId, a.ownerId))) return false;
-      await tx.insert(deployments).values({
-        id: deploymentId, appId, source: input.source, sourceKey, createdBy: accountId, commitSha: input.commitSha ?? null,
-      });
-      return true;
-    });
-    if (!ok) throw new Error('app_gone');
-    await queue.send(JOBS.processDeployment, { deploymentId });
-  } catch (e) {
-    await storage.sources.delete(sourceKey).catch(() => undefined);
-    if (e instanceof Error && e.message === 'app_gone') return { error: 'not_found' };
-    throw e;
-  }
-  return { deploymentId };
+  return storeAndQueue(db, storage, queue, appId, input, accountId, (fn) => withAccount(db, accountId, fn), (tx, ownerId) => mayManage(tx, accountId, ownerId));
+}
+
+/**
+ * Same as createDeployment for system callers (GitHub webhook): the caller has already authorised the app
+ * (matched installation + repo + branch), so no account is involved and `created_by` stays null.
+ */
+export async function createSystemDeployment(
+  db: Db, storage: Storage, queue: JobQueue, appId: string,
+  input: { source: DeploySource; archive: Readable; format: ArchiveFormat; commitSha?: string },
+): Promise<{ deploymentId: string } | { error: CreateDeploymentError }> {
+  if (!UUID.test(appId)) return { error: 'not_found' };
+  return storeAndQueue(db, storage, queue, appId, input, null, (fn) => withSystem(db, fn), async () => true);
 }
 
 export async function listDeployments(db: Db, accountId: string, appId: string) {

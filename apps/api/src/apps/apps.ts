@@ -101,3 +101,32 @@ export async function deleteApp(
   }
   return r;
 }
+
+export const GITHUB_REPO = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
+
+/**
+ * Connects an app to a GitHub repo/branch through an App installation. The owner's deploy permission is
+ * required; `verify` confirms with GitHub that the installation exists and can read the repo.
+ */
+export async function setGithub(
+  db: Db, accountId: string, appId: string, input: { repo: string; branch: string; installationId: string },
+  verify: (installationId: string, repo: string) => Promise<boolean>,
+): Promise<{ ok: true } | { error: 'not_found' | 'invalid' | 'forbidden' }> {
+  if (!UUID.test(appId)) return { error: 'not_found' };
+  if (!GITHUB_REPO.test(input.repo) || !/^\d{1,20}$/.test(input.installationId)
+    || input.branch.length === 0 || input.branch.length > 255 || /[\s~^:?*[\\]/.test(input.branch) || [...input.branch].some((ch) => ch < ' ' || ch === '\x7f')) return { error: 'invalid' };
+  const access = await withAccount(db, accountId, async (tx) => {
+    const [a] = await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId));
+    if (!a) return 'not_found' as const;
+    return (await mayManage(tx, accountId, a.ownerId)) ? ('ok' as const) : ('forbidden' as const);
+  });
+  if (access !== 'ok') return { error: access };
+  if (!(await verify(input.installationId, input.repo))) return { error: 'invalid' };
+  return withAccount(db, accountId, async (tx) => {
+    const [a] = await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId)).for('update');
+    if (!a) return { error: 'not_found' as const };
+    if (!(await mayManage(tx, accountId, a.ownerId))) return { error: 'forbidden' as const };
+    await tx.update(apps).set({ githubRepo: input.repo, githubBranch: input.branch, githubInstallationId: input.installationId }).where(eq(apps.id, appId));
+    return { ok: true as const };
+  });
+}
