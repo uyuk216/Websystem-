@@ -1,0 +1,245 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildKubernetesManifests > matches snapshot 1`] = `
+[
+  {
+    "apiVersion": "v1",
+    "kind": "Namespace",
+    "metadata": {
+      "labels": {
+        "ys.owner": "ys-o-abcdef012345",
+      },
+      "name": "ys-o-abcdef012345",
+    },
+  },
+  {
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {
+      "labels": {
+        "ys.app": "app1",
+      },
+      "name": "ys-app-app1",
+      "namespace": "ys-o-abcdef012345",
+    },
+    "spec": {
+      "replicas": 1,
+      "selector": {
+        "matchLabels": {
+          "ys.app": "app1",
+        },
+      },
+      "template": {
+        "metadata": {
+          "labels": {
+            "ys.app": "app1",
+          },
+        },
+        "spec": {
+          "automountServiceAccountToken": false,
+          "containers": [
+            {
+              "env": [
+                {
+                  "name": "FOO",
+                  "value": "bar",
+                },
+                {
+                  "name": "PORT",
+                  "value": "8080",
+                },
+              ],
+              "image": "registry.local/app1:v1",
+              "imagePullPolicy": "IfNotPresent",
+              "name": "app",
+              "ports": [
+                {
+                  "containerPort": 8080,
+                },
+              ],
+              "resources": {
+                "limits": {
+                  "cpu": "0.5",
+                  "ephemeral-storage": "128Mi",
+                  "memory": "512Mi",
+                },
+                "requests": {
+                  "cpu": "0.5",
+                  "memory": "512Mi",
+                },
+              },
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "capabilities": {
+                  "drop": [
+                    "ALL",
+                  ],
+                },
+                "privileged": false,
+                "readOnlyRootFilesystem": true,
+                "runAsNonRoot": true,
+              },
+              "volumeMounts": [
+                {
+                  "mountPath": "/tmp",
+                  "name": "tmp",
+                },
+              ],
+            },
+          ],
+          "enableServiceLinks": false,
+          "runtimeClassName": "gvisor",
+          "securityContext": {
+            "runAsGroup": 65534,
+            "runAsNonRoot": true,
+            "runAsUser": 65534,
+            "seccompProfile": {
+              "type": "RuntimeDefault",
+            },
+          },
+          "volumes": [
+            {
+              "emptyDir": {
+                "medium": "Memory",
+                "sizeLimit": "64Mi",
+              },
+              "name": "tmp",
+            },
+          ],
+        },
+      },
+    },
+  },
+  {
+    "apiVersion": "v1",
+    "kind": "Service",
+    "metadata": {
+      "labels": {
+        "ys.app": "app1",
+      },
+      "name": "ys-app-app1",
+      "namespace": "ys-o-abcdef012345",
+    },
+    "spec": {
+      "ports": [
+        {
+          "port": 8080,
+          "targetPort": 8080,
+        },
+      ],
+      "selector": {
+        "ys.app": "app1",
+      },
+    },
+  },
+  {
+    "apiVersion": "networking.k8s.io/v1",
+    "kind": "NetworkPolicy",
+    "metadata": {
+      "name": "ys-app-isolation",
+      "namespace": "ys-o-abcdef012345",
+    },
+    "spec": {
+      "egress": [
+        {
+          "ports": [
+            {
+              "port": 53,
+              "protocol": "UDP",
+            },
+            {
+              "port": 53,
+              "protocol": "TCP",
+            },
+          ],
+          "to": [
+            {
+              "namespaceSelector": {
+                "matchLabels": {
+                  "kubernetes.io/metadata.name": "kube-system",
+                },
+              },
+            },
+          ],
+        },
+        {
+          "ports": [
+            {
+              "port": 80,
+              "protocol": "TCP",
+            },
+            {
+              "port": 443,
+              "protocol": "TCP",
+            },
+            {
+              "port": 5432,
+              "protocol": "TCP",
+            },
+            {
+              "port": 3306,
+              "protocol": "TCP",
+            },
+          ],
+          "to": [
+            {
+              "ipBlock": {
+                "cidr": "0.0.0.0/0",
+                "except": [
+                  "169.254.169.254/32",
+                  "10.0.0.0/8",
+                  "172.16.0.0/12",
+                  "192.168.0.0/16",
+                  "169.254.0.0/16",
+                  "100.64.0.0/10",
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      "ingress": [
+        {
+          "from": [
+            {
+              "namespaceSelector": {
+                "matchLabels": {
+                  "kubernetes.io/metadata.name": "ys-system",
+                },
+              },
+            },
+          ],
+          "ports": [
+            {
+              "port": 8080,
+              "protocol": "TCP",
+            },
+          ],
+        },
+      ],
+      "podSelector": {},
+      "policyTypes": [
+        "Ingress",
+        "Egress",
+      ],
+    },
+  },
+  {
+    "apiVersion": "v1",
+    "kind": "ResourceQuota",
+    "metadata": {
+      "name": "ys-owner-quota",
+      "namespace": "ys-o-abcdef012345",
+    },
+    "spec": {
+      "hard": {
+        "limits.cpu": "1",
+        "limits.memory": "1024Mi",
+        "pods": "2",
+        "requests.cpu": "1",
+        "requests.memory": "1024Mi",
+      },
+    },
+  },
+]
+`;

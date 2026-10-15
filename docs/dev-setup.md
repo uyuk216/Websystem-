@@ -86,3 +86,14 @@ Migrations 0006/0007 enable and FORCE RLS on accounts, owners, sessions, passkey
 ## CI
 
 `.github/workflows/ci.yml` を参照。ubuntu は PostgreSQL / Mailpit をサービスコンテナ、MinIO を `docker run` で起動し、バケットを作成してから全テスト（api・worker・static・cli を含む）と E2E（worker・static も一緒に起動）を実行します。macOS は Docker が無いため lint・typecheck と shared / i18n のテストのみです。gitleaks（設定は `.gitleaks.toml`）と `pnpm audit --audit-level=high` も実行します。依存更新は Renovate（`renovate.json`）が毎週月曜 6 時前にまとめて PR を作ります。
+
+## 動的アプリのランタイム（Docker ドライバ）
+
+開発では `packages/platform/src/runtime/docker.ts` がアプリを `ys-apps` ブリッジネットワーク上のコンテナ（`ys-app-<appId>`）として起動します。ホスト側へは `127.0.0.1` のランダムなポートだけを公開し、root 以外のユーザー・全 capability 削除・`no-new-privileges`・読み取り専用ルート（`/tmp` のみ 64MB tmpfs）・メモリ／CPU／PID 上限を付けます。`RUNTIME=runsc` を設定すると gVisor で動かし、未設定なら警告を出して runc で動かします（開発用）。
+
+注意：Docker では `--add-host` で IP リテラル `169.254.169.254` を無効化できません。クラウド上のホストでメタデータサービスを遮断するには、ホスト側で次を設定してください（本番は Kubernetes の NetworkPolicy が `169.254.169.254/32` とポート 25 を遮断します）。
+
+```bash
+sudo iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
+sudo iptables -I DOCKER-USER -p tcp --dport 25 -j DROP
+```
