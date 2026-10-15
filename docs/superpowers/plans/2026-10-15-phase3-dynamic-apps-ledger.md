@@ -21,3 +21,5 @@ Task 4: fix round 1 — Criticals addressed (commit 13c5c7d); round 2 + T5 merge
 Task 4: fix round 2 + carries done (commits 13c5c7d..fee0dc2) — complete (round-2 controller-accepted; tests green)
 Task 5: merged (1d8aaec, migration renumbered 0021) — complete
 STOPPED (budget): Tasks 7 (logs) and 8 (web/k8s driver/docs) not started; no Phase 3 final review yet
+Task 7: implemented WITHOUT review (budget) — commit 7018f48. Known gaps: bytes from Content-Length (chunked=0), WebSocket not logged, edge IP is socket addr behind proxy, referrer origin only. MUST be reviewed before relying on it.
+Remaining: Task 8 (web/k8s driver/docs), Phase 3 final review.
