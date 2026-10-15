@@ -82,7 +82,17 @@ export async function approveRecovery(
   const newHash = await hashRecoveryCode(newRecoveryCode);
   const now = new Date();
 
-  const { emailEnc, locale } = await db.transaction(async (tx) => {
+  // Decrypt before changing anything: a failure here must leave all state untouched.
+  const [target] = await db
+    .select({ emailEnc: accounts.emailEnc, locale: accounts.locale })
+    .from(recoveryRequests)
+    .innerJoin(accounts, eq(accounts.id, recoveryRequests.accountId))
+    .where(and(eq(recoveryRequests.id, requestId), eq(recoveryRequests.status, 'pending')));
+  if (!target) throw new Error('recovery request not found or already decided');
+  const to = decryptEmail(target.emailEnc, cfg.emailEncKey);
+  const loc = target.locale === 'en' ? 'en' : 'ja';
+
+  await db.transaction(async (tx) => {
     const [req] = await tx
       .update(recoveryRequests)
       .set({ status: 'approved', decidedAt: now })
@@ -91,12 +101,9 @@ export async function approveRecovery(
     if (!req) throw new Error('recovery request not found or already decided');
     await tx.update(sessions).set({ revokedAt: now }).where(and(eq(sessions.accountId, req.accountId), isNull(sessions.revokedAt)));
     await tx.delete(passkeys).where(eq(passkeys.accountId, req.accountId));
-    const [acc] = await tx.update(accounts).set({ recoveryCodeHash: newHash }).where(eq(accounts.id, req.accountId)).returning({ emailEnc: accounts.emailEnc, locale: accounts.locale });
-    return acc!;
+    await tx.update(accounts).set({ recoveryCodeHash: newHash }).where(eq(accounts.id, req.accountId));
   });
 
-  const loc = locale === 'en' ? 'en' : 'ja';
-  const to = decryptEmail(emailEnc, cfg.emailEncKey);
   try {
     await mailer.sendMail(to, t(loc, 'recovery.approvedSubject'), t(loc, 'recovery.approvedBody'));
   } catch (err) {

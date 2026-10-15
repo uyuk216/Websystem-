@@ -95,3 +95,23 @@ describe('mail failures', () => {
       expect(await verifyRecoveryCode(out.newRecoveryCode, row!.recoveryCodeHash!)).toBe(true);
     }));
 });
+
+describe('approve with undecryptable email', () => {
+  it('rejects and changes nothing', () =>
+    withTestDb(async (db) => {
+      const mail = createFakeMailer();
+      const code = generateRecoveryCode();
+      const a = await mkAccount(db, 'a@x.y', code);
+      const { token } = await createSession(db, a.id, 'Mac');
+      await db.insert(passkeys).values({ id: 'pk', accountId: a.id, publicKey: Buffer.from([1]) });
+      const r = await requestRecovery(db, mail, { email: 'a@x.y', recoveryCode: code }, cfg);
+      if ('error' in r) throw new Error('expected ok');
+      await db.update(accounts).set({ emailEnc: 'corrupt' });
+      await expect(approveRecovery(db, mail, r.requestId, cfg)).rejects.toThrow();
+      expect(await resolveSession(db, token)).not.toBeNull();
+      expect(await db.select().from(passkeys)).toHaveLength(1);
+      const [acc] = await db.select().from(accounts);
+      expect(await verifyRecoveryCode(code, acc!.recoveryCodeHash!)).toBe(true);
+      expect((await db.select().from(recoveryRequests))[0]!.status).toBe('pending');
+    }));
+});
