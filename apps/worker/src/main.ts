@@ -3,6 +3,8 @@ import { createDb } from 'api/db';
 import { sweepStaleDeployments } from 'api/publish';
 import { createDynamicRuntime } from 'api/dynamic';
 import { createWakeLocker, sleepIdleApps } from 'api/wake';
+import { startRuntimeMetering } from 'api/runtime-hours';
+import { createMailer } from 'api/mailer';
 import { defaultHandlers, registerHandlers } from './worker.js';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -30,6 +32,13 @@ if (runtime) {
   const sleepTick = () => sleepIdleApps(db, runtime.driver).then((ids) => { for (const id of ids) console.log(`worker: app ${id} went to sleep`); }, (e: unknown) => console.error('worker: sleep sweep failed', e));
   const sleepTimer = setInterval(() => void sleepTick(), 60_000);
   sleepTimer.unref();
+}
+
+// Runtime-hour metering: one tick per minute (idempotent per app-minute, so several workers do not double count).
+if (runtime) {
+  const emailKey = process.env.EMAIL_ENC_KEY ? Buffer.from(process.env.EMAIL_ENC_KEY, 'base64') : undefined;
+  const mailer = process.env.SMTP_URL ? createMailer(process.env.SMTP_URL, process.env.MAIL_FROM || 'no-reply@localhost') : undefined;
+  startRuntimeMetering({ db, driver: runtime.driver, mailer, emailKey });
 }
 console.log('worker: waiting for jobs');
 

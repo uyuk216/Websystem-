@@ -232,3 +232,21 @@ export const appEnvVars = pgTable('app_env_vars', {
   valueEnc: text('value_enc').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [primaryKey({ columns: [t.appId, t.name] })]);
+
+/** One row per app per minute with containers running (dedupe key for runtime metering). Written only by the metering job. */
+export const runtimeMinutes = pgTable('runtime_minutes', {
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  minute: timestamp('minute', { withTimezone: true }).notNull(),
+  containers: integer('containers').notNull(),
+}, (t) => [primaryKey({ columns: [t.appId, t.minute] })]);
+
+/** Container-minutes per owner and period ('YYYY-MM' in JST, or 'FY<start year>'). Written only by the metering job. */
+export const runtimeUsage = pgTable('runtime_usage', {
+  ownerId: uuid('owner_id').notNull().references(() => owners.id, { onDelete: 'cascade' }),
+  period: text('period').notNull(),
+  minutes: bigint('minutes', { mode: 'number' }).notNull().default(0),
+  notified80: boolean('notified_80').notNull().default(false),
+}, (t) => [
+  primaryKey({ columns: [t.ownerId, t.period] }),
+  check('runtime_usage_period_format_check', sql`${t.period} ~ '^([0-9]{4}-(0[1-9]|1[0-2])|FY[0-9]{4})$'`),
+]);
