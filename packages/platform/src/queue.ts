@@ -25,7 +25,10 @@ export function createQueue(databaseUrl: string): PgBoss {
 export async function startQueue(boss: PgBoss): Promise<PgBoss> {
   await boss.start();
   for (const name of Object.values(JOBS)) {
-    await boss.createQueue(name, name === JOBS.processDeployment ? { retryLimit: DEPLOY_RETRY_LIMIT, retryDelay: 5, retryBackoff: true } : {});
+    const options = name === JOBS.processDeployment ? { retryLimit: DEPLOY_RETRY_LIMIT, retryDelay: 5, retryBackoff: true } : {};
+    await boss.createQueue(name, options);
+    // createQueue is a no-op for an existing queue, so apply the current options explicitly.
+    if (Object.keys(options).length > 0) await boss.updateQueue(name, options);
   }
   return boss;
 }

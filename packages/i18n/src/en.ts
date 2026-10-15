@@ -145,6 +145,7 @@ export const en = {
   'deploy.error.corrupt': 'The archive could not be read.',
   'deploy.error.empty': 'There are no files to publish. Check the publish folder setting.',
   'deploy.error.download_failed': 'The source could not be downloaded from GitHub. Push again to retry.',
+  'deploy.error.stale': 'The deployment did not start in time and was cancelled. Push or upload again.',
   'deploy.error.internal': 'An error occurred while processing. Please try again.',
   'deploy.error.source_missing': 'The uploaded file could not be found.',
   'deploy.blockedSecret': 'Text that looks like a secret was found, so the site was not published.',

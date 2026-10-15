@@ -12,6 +12,7 @@ import { createApp } from '../src/apps/apps.js';
 import { deleteAppStorage, processDeployment } from '../src/ingest/publish.js';
 import { createApp as createHttpApp } from '../src/http/app.js';
 import { createFakeMailer } from './helpers/fake-mailer.js';
+import { createApiToken } from '../src/apps/api-tokens.js';
 import { createSession } from '../src/auth/sessions.js';
 import { verifyWebhook } from '../src/github/webhook.js';
 import type { GithubClient } from '../src/github/client.js';
@@ -303,4 +304,15 @@ describe('github', () => {
     expect(validRepo('octo/site')).toBe(true);
     for (const r of ['./x', '../x', 'a/..', 'a/.', 'a/b.git', 'a/b.GIT', 'a', 'a/b/c']) expect(validRepo(r)).toBe(false);
   });
+
+  it('privilege-granting routes reject Bearer tokens', () => withTestDb(async (db) => {
+    const { accountId, appId } = await setup(db);
+    const { token } = await createApiToken(db, accountId, 'ci');
+    const h = harness(db);
+    const bearer = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+    const u = '00000000-0000-0000-0000-000000000001';
+    for (const [m, path] of [['GET', '/github/connect'], ['GET', '/github/callback?code=c&state=s'], ['PATCH', `/apps/${appId}/github`], ['POST', `/teams/${u}/invites`]] as const) {
+      expect((await h.app.request(path, { method: m, headers: bearer, body: m === 'GET' ? undefined : '{}', redirect: 'manual' })).status, `${m} ${path}`).toBe(401);
+    }
+  }));
 });

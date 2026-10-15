@@ -3,14 +3,14 @@ import { Readable } from 'node:stream';
 import { text } from 'node:stream/consumers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { createStorage, JOBS, loadStorageConfig, type Storage } from 'platform';
+import { createQueue, createStorage, JOBS, loadStorageConfig, startQueue, type Storage } from 'platform';
 import { makeZip } from '../../../packages/platform/test/ingest/helpers.js';
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { accounts, apps, deployments, teamMembers } from '../src/db/schema.js';
 import { createTeam, ensureAccountOwner } from '../src/teams/teams.js';
 import { createApp, deleteApp, updateApp } from '../src/apps/apps.js';
 import { createDeployment, listDeployments, rollback } from '../src/apps/deployments.js';
-import { deleteAppStorage, processDeployment } from '../src/ingest/publish.js';
+import { deleteAppStorage, processDeployment, sweepStaleDeployments } from '../src/ingest/publish.js';
 import { createApp as createHttpApp } from '../src/http/app.js';
 import { createFakeMailer } from './helpers/fake-mailer.js';
 import { createSession } from '../src/auth/sessions.js';
@@ -165,6 +165,49 @@ describe('deployments', () => {
     expect((await row(db, d2)).status).toBe('superseded');
     await cleanup(appId);
   }));
+
+  it('rollback to a commit whose newer deployment is queued/processing supersedes that one', () => withTestDb(async (db) => {
+    const { a, appId } = await setup(db);
+    const sha = 'c'.repeat(40);
+    const d1 = await deploy(db, a, appId, { 'index.html': '1' });
+    await db.update(deployments).set({ commitSha: sha }).where(eq(deployments.id, d1));
+    await processDeployment(db, storage, d1);
+    const d2 = await deploy(db, a, appId, { 'index.html': '2' });
+    await processDeployment(db, storage, d2);
+    const d3 = await deploy(db, a, appId, { 'index.html': '3' });
+    await db.update(deployments).set({ commitSha: sha }).where(eq(deployments.id, d3));
+    expect(await rollback(db, a.id, appId, d1)).toEqual({ ok: true });
+    expect(await active(db, appId)).toBe(d1);
+    expect((await row(db, d1)).status).toBe('live');
+    expect((await row(db, d3)).status).toBe('superseded');
+    await processDeployment(db, storage, d3); // its job now no-ops
+    expect((await row(db, d3)).status).toBe('superseded');
+    expect(await active(db, appId)).toBe(d1);
+    await cleanup(appId);
+  }));
+
+  it('sweep fails stale queued deployments without a pending job', () => withTestDb(async (db) => {
+    const { a, appId } = await setup(db);
+    const o = (db.$client as unknown as { options: { host: string[]; port: number[]; user: string; pass: string; database: string } }).options;
+    const boss = await startQueue(createQueue(`postgres://${o.user}:${o.pass}@${o.host[0]}:${o.port[0]}/${o.database}`));
+    try {
+      const old = await deploy(db, a, appId, { 'index.html': '1' });
+      const withJob = await deploy(db, a, appId, { 'index.html': '2' });
+      const fresh = await deploy(db, a, appId, { 'index.html': '3' });
+      const ago = new Date(Date.now() - 20 * 60_000);
+      await db.update(deployments).set({ createdAt: ago }).where(eq(deployments.id, old));
+      await db.update(deployments).set({ createdAt: ago }).where(eq(deployments.id, withJob));
+      await boss.send(JOBS.processDeployment, { deploymentId: withJob });
+      expect(await sweepStaleDeployments(db)).toBe(1);
+      expect(await row(db, old)).toMatchObject({ status: 'failed', message: 'deploy.error.stale' });
+      expect((await row(db, withJob)).status).toBe('queued');
+      expect((await row(db, fresh)).status).toBe('queued');
+      expect(await sweepStaleDeployments(db)).toBe(0);
+    } finally {
+      await boss.stop({ graceful: false });
+    }
+    await cleanup(appId);
+  }), 30000);
 
   it('cannot deploy to someone else\'s app; team members can, outsiders cannot', () => withTestDb(async (db) => {
     const { a, appId } = await setup(db);

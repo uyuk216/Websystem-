@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Transform, type Readable } from 'node:stream';
-import { and, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { BUCKETS, JOBS, appPrefix, type ArchiveFormat, type Storage } from 'platform';
 import { STATIC_LIMITS } from 'shared';
 import { UUID } from '../auth/cross-device.js';
@@ -15,6 +15,8 @@ export interface JobQueue {
 export type DeploySource = 'upload' | 'cli' | 'github';
 export type CreateDeploymentError = 'not_found' | 'forbidden' | 'too_large' | 'invalid';
 export type RollbackError = 'not_found' | 'forbidden' | 'invalid_state';
+
+export const DOWNLOAD_TIMEOUT_MS = 120_000;
 
 /** Errors the upload stream raises when the archive exceeds the size limit. */
 class TooLarge extends Error {}
@@ -122,8 +124,12 @@ export async function createSystemDeployment(
   };
   let archive: Readable | undefined;
   try {
+    // Whole download + store is bounded, even if the client's own timeout does not cover the body stream.
+    const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
     archive = await input.fetchArchive();
     const capped = capBytes(STATIC_LIMITS.storageBytes);
+    const abort = () => { const err = new Error('download_timeout'); archive?.destroy(err); capped.destroy(err); };
+    signal.addEventListener('abort', abort, { once: true });
     archive.on('error', (e) => capped.destroy(e));
     archive.pipe(capped);
     await storage.sources.put(sourceKey, capped, 'application/octet-stream');
@@ -165,6 +171,13 @@ export async function rollback(
     if (!['live', 'superseded'].includes(d.status) || !d.siteKey) return { error: 'invalid_state' as const };
     await tx.update(deployments).set({ status: 'superseded' })
       .where(and(eq(deployments.appId, appId), eq(deployments.status, 'live'), ne(deployments.id, d.id)));
+    // A queued/processing deployment of the same commit would violate the active-commit unique index; its
+    // job then no-ops (processDeployment only claims queued/processing rows, and re-checks before switching).
+    if (d.commitSha) {
+      await tx.update(deployments).set({ status: 'superseded' }).where(and(
+        eq(deployments.appId, appId), eq(deployments.commitSha, d.commitSha), ne(deployments.id, d.id), inArray(deployments.status, ['queued', 'processing']),
+      ));
+    }
     await tx.update(deployments).set({ status: 'live' }).where(eq(deployments.id, d.id));
     await tx.update(apps).set({ activeDeploymentId: d.id, rolledBackAt: sql`now()` }).where(eq(apps.id, appId));
     return { ok: true as const };

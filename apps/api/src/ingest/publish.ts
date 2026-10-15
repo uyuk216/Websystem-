@@ -1,6 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import {
-  ArchiveError, BUCKETS, MAX_SCAN_BYTES, appPrefix, extractArchive, findExecutables, scanSecrets,
+  ArchiveError, BUCKETS, JOBS, MAX_SCAN_BYTES, appPrefix, extractArchive, findExecutables, scanSecrets,
   type ArchiveFormat, type Finding, type Storage,
 } from 'platform';
 import { STATIC_LIMITS } from 'shared';
@@ -128,6 +128,11 @@ export async function processDeployment(
         await storage.sites.deletePrefix(siteKey);
         return;
       }
+      const [cur] = await tx.select({ status: deployments.status }).from(deployments).where(eq(deployments.id, deploymentId));
+      if (cur?.status !== 'processing') { // superseded meanwhile (e.g. by a rollback to the same commit): do not go live
+        await storage.sites.deletePrefix(siteKey);
+        return;
+      }
       const done = { siteKey, totalBytes: out.bytes, fileCount: out.files, finishedAt: new Date(), message: null };
       const newer = await tx.execute(sql`
         SELECT 1 FROM deployments WHERE app_id = ${appId} AND status = 'live'
@@ -158,4 +163,26 @@ export async function processDeployment(
 export async function deleteAppStorage(storage: Storage, appId: string): Promise<void> {
   await storage.sources.deletePrefix(appPrefix(BUCKETS.sources, appId));
   await storage.sites.deletePrefix(appPrefix(BUCKETS.sites, appId));
+}
+
+export const STALE_QUEUED_MS = 15 * 60_000;
+
+/**
+ * Marks `queued` deployments older than 15 minutes that have no pending pg-boss job (never enqueued, or the
+ * process died in between) as `failed` (deploy.error.stale), which also frees their (app, commit) dedupe slot
+ * so the next push of that commit is accepted. Returns the number of deployments marked.
+ */
+export async function sweepStaleDeployments(db: Db, now: Date = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - STALE_QUEUED_MS);
+  return withSystem(db, async (tx) => {
+    const rows = await tx.execute(sql`
+      UPDATE deployments d SET status = 'failed', message = 'deploy.error.stale', finished_at = now()
+      WHERE d.status = 'queued' AND d.created_at < ${cutoff.toISOString()}::timestamptz
+        AND NOT EXISTS (
+          SELECT 1 FROM pgboss.job j
+          WHERE j.name = ${JOBS.processDeployment} AND j.data->>'deploymentId' = d.id::text
+            AND j.state IN ('created', 'retry', 'active'))
+      RETURNING d.id`);
+    return rows.length;
+  });
 }

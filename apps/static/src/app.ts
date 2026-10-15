@@ -19,7 +19,7 @@ export interface StaticAppDeps {
   meter: Pick<TransferMeter, 'record' | 'isBlocked'>;
   baseDomain: string;
   now?: () => Date;
-  /** How long a name -> live site lookup is reused. */
+  /** How long a name -> live site lookup is reused (default 3s: a rollback or new deployment can take up to this long to show per static process). */
   siteCacheMs?: number;
 }
 
@@ -51,7 +51,7 @@ function rawPath(c: Context): string {
 
 export function createStaticApp(deps: StaticAppDeps): Hono {
   const now = deps.now ?? (() => new Date());
-  const siteCacheMs = deps.siteCacheMs ?? 10_000;
+  const siteCacheMs = deps.siteCacheMs ?? 3_000;
   const sites = new Map<string, { at: number; site: { appId: string; siteKey: string } | null }>();
 
   async function lookup(name: string) {

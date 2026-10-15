@@ -237,7 +237,7 @@ export function createApp(deps?: AppDeps): Hono {
       const r = await deleteTeam(deps.db, c.req.param('id'), c.get('accountId'));
       return 'error' in r ? teamErr(c, r.error) : c.json(r);
     });
-    app.post('/teams/:id/invites', session, inviteLimit, async (c) => {
+    app.post('/teams/:id/invites', cookieSession, inviteLimit, async (c) => {
       const b = await jsonBody(c);
       if (!str(b?.email, 320)) return c.json({ error: 'invalid' }, 400);
       const r = await inviteMember(deps.db, deps.mailer, c.req.param('id'), c.get('accountId'), b.email, deps.config);
@@ -368,11 +368,11 @@ export function createApp(deps?: AppDeps): Hono {
         return c.json({ ok: true, apps: targets.length }, 202);
       });
       // User authorization: proves which installations the signed-in account controls.
-      app.get('/github/connect', session, async (c) => {
+      app.get('/github/connect', cookieSession, async (c) => {
         const state = await startConnect(deps.db, c.get('accountId'), c.get('sessionId'));
         return c.redirect(client.authorizeUrl(state));
       });
-      app.get('/github/callback', session, attemptLimit, async (c) => {
+      app.get('/github/callback', cookieSession, attemptLimit, async (c) => {
         const code = c.req.query('code');
         const state = c.req.query('state');
         const back = (ok: boolean) => c.redirect(`${deps.config.appOrigin}/apps?github=${ok ? 'connected' : 'error'}`);
@@ -383,7 +383,7 @@ export function createApp(deps?: AppDeps): Hono {
         });
         return back(!('error' in r));
       });
-      app.patch('/apps/:id/github', session, async (c) => {
+      app.patch('/apps/:id/github', cookieSession, async (c) => {
         const b = await jsonBody(c);
         const installationId = typeof b?.installationId === 'number' ? String(b.installationId) : b?.installationId;
         if (!str(b?.repo, 201) || !str(b.branch, 255) || !str(installationId, 16)) return c.json({ error: 'invalid' }, 400);
