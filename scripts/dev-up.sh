@@ -26,6 +26,11 @@ fi
 
 docker compose -f dev/compose.yaml up -d --wait
 
+# MinIO のバケット（sources / sites）を冪等に作成する
+if [ -f apps/worker/package.json ]; then
+  pnpm --filter worker ensure-buckets
+fi
+
 if [ "$NO_K8S" -eq 0 ]; then
   for name in platform tenant; do
     if k3d cluster list 2>/dev/null | awk 'NR>1{print $1}' | grep -qx "$name"; then

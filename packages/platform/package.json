@@ -1,0 +1,23 @@
+{
+  "name": "platform",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1152.0",
+    "pg-boss": "^12.38.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "postgres": "^3.4.9",
+    "vitest": "^4.1.11"
+  }
+}
