@@ -17,6 +17,19 @@ describe('per-IP limit via socket address', () => {
   });
 });
 
+describe('per-IP limit with one trusted proxy hop', () => {
+  it('separates clients by X-Forwarded-For and trusts only the right-most entry', async () => {
+    const app = createApp({ ...deps, trustedProxyHops: 1 } as unknown as AppDeps);
+    // Same socket (the Next rewrite); different client addresses appended by the proxy get their own buckets.
+    for (let i = 0; i < 10; i++) expect((await post(app, '127.0.0.1', `10.0.0.1`)).status).toBe(400);
+    expect((await post(app, '127.0.0.1', '10.0.0.1')).status).toBe(429);
+    expect((await post(app, '127.0.0.1', '10.0.0.2')).status).toBe(400);
+    // A client-supplied left-hand entry cannot escape its bucket: only the proxy-appended right-most entry counts.
+    expect((await post(app, '127.0.0.1', '6.6.6.6, 10.0.0.1')).status).toBe(429);
+    expect((await post(app, '127.0.0.1', '10.0.0.1, 10.0.0.3')).status).toBe(400); // different right-most entry
+  });
+});
+
 describe('parseHops', () => {
   it('defaults to 0, accepts 0-10, rejects others', () => {
     expect(parseHops(undefined)).toBe(0);

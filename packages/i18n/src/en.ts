@@ -21,6 +21,8 @@ export const en = {
   'common.email': 'Email address',
   'common.next': 'Next',
   'common.back': 'Back',
+  'common.loadError': 'Could not load the page. Check your connection and try again.',
+  'common.retry': 'Retry',
   'common.loading': 'Loading…',
   'common.error': 'Something went wrong. Please try again.',
   'common.rateLimited': 'Too many attempts. Please try again later.',

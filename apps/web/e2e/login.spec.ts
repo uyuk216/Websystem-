@@ -46,19 +46,25 @@ test.describe('en', () => {
   });
 });
 
+const MAC_SAFARI = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+const IPHONE_SAFARI = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+
+/**
+ * Device A (laptop) requests the login. The mailed link is opened on the phone, and that same phone
+ * scans the QR code from A's screen and confirms. Only the browser that opened the link may confirm.
+ */
 async function startCrossDevice(browser: import('@playwright/test').Browser) {
   const email = newEmail();
   const setup = await browser.newContext({ locale: 'ja-JP' });
   await signUp(await setup.newPage(), email);
   await setup.close();
-  // Device A requests the login; the mail link is opened on device B.
-  const ctxA = await browser.newContext({ locale: 'ja-JP' });
+  const ctxA = await browser.newContext({ locale: 'ja-JP', userAgent: MAC_SAFARI });
   const a = await ctxA.newPage();
   await a.goto('/ja/login');
   await a.locator('#email').fill(email);
   await a.locator('form button[type=submit]').click();
   const link = linkOf(await nextMail(email));
-  const ctxB = await browser.newContext({ locale: 'ja-JP' });
+  const ctxB = await browser.newContext({ locale: 'ja-JP', userAgent: IPHONE_SAFARI });
   const b = await ctxB.newPage();
   await b.goto(link.pathname + link.search); // /login/link?c=&t= -> locale redirect keeps the query
   await expect(b.getByText('この端末ではログインしていません')).toBeVisible();
@@ -66,30 +72,50 @@ async function startCrossDevice(browser: import('@playwright/test').Browser) {
   await expect(qr).toBeVisible();
   const payload = new URL((await qr.getAttribute('data-payload'))!);
   const number = (await a.getByTestId('login-number').textContent())!.trim();
-  // Device C is the already logged-in device that scans the QR code.
-  const ctxC = await browser.newContext({ locale: 'ja-JP' });
-  const c = await ctxC.newPage();
-  await c.goto(payload.pathname + payload.search);
-  await expect(c.getByRole('heading', { name: 'ログインの確認' })).toBeVisible();
-  return { a, c, number, close: async () => { await ctxA.close(); await ctxB.close(); await ctxC.close(); } };
+  return { a, ctxA, b, payload, number, close: async () => { await ctxA.close(); await ctxB.close(); } };
 }
 
-test('別の端末でリンクを開くと QR と数字が出て、正しい数字でログインできる', async ({ browser }) => {
+test('リンクを開いた端末で QR を読み取り、正しい数字を選ぶとログインできる', async ({ browser }) => {
   const s = await startCrossDevice(browser);
-  await expect(s.c.locator('.choices button')).toHaveCount(3);
-  await s.c.getByRole('button', { name: s.number, exact: true }).click();
-  await expect(s.c.getByText('承認しました')).toBeVisible();
+  // The phone (same browser context that opened the mailed link) scans the QR code.
+  await s.b.goto(s.payload.pathname + s.payload.search);
+  await expect(s.b.getByRole('heading', { name: 'ログインの確認' })).toBeVisible();
+  await expect(s.b.locator('dd').first()).toHaveText('Mac / Safari'); // the requesting device
+  await expect(s.b.locator('.choices button')).toHaveCount(3);
+  await s.b.getByRole('button', { name: s.number, exact: true }).click();
+  await expect(s.b.getByText('承認しました')).toBeVisible();
   await expect(s.a).toHaveURL(/settings\/devices/, { timeout: 15_000 });
+  await s.close();
+});
+
+test('要求元の端末（攻撃者の画面）では QR を読み込んでも確認できない', async ({ browser }) => {
+  const s = await startCrossDevice(browser);
+  // The requester sees both the QR payload and the number on its own screen, but its device id is not the opener's.
+  await s.a.goto(s.payload.pathname + s.payload.search);
+  await expect(s.a.getByText('この確認は無効か、期限切れです。')).toBeVisible();
+  await expect(s.a.locator('.choices button')).toHaveCount(0);
+  const res = await s.ctxA.request.post('/api/auth/email/confirm', {
+    data: { challengeId: s.payload.searchParams.get('c'), scanToken: s.payload.searchParams.get('s'), chosen: Number(s.number) },
+  });
+  expect(res.status()).toBe(400);
+  // The refused confirm killed the challenge: the phone can no longer approve it either.
+  await s.b.goto(s.payload.pathname + s.payload.search);
+  await expect(s.b.getByText('この確認は無効か、期限切れです。')).toBeVisible();
+  await s.a.goto('/ja/login');
+  await expect(s.a).not.toHaveURL(/settings/);
   await s.close();
 });
 
 test('間違った数字を選ぶとログインできない', async ({ browser }) => {
   const s = await startCrossDevice(browser);
-  await expect(s.c.locator('.choices button')).toHaveCount(3);
-  const wrong = (await s.c.locator('.choices button').allTextContents()).find((n) => n !== s.number)!;
-  await s.c.getByRole('button', { name: wrong, exact: true }).click();
-  await expect(s.c.getByText('数字が違います')).toBeVisible();
-  await s.a.waitForTimeout(5000); // two poll cycles
+  await s.b.goto(s.payload.pathname + s.payload.search);
+  await expect(s.b.locator('.choices button')).toHaveCount(3);
+  const wrong = (await s.b.locator('.choices button').allTextContents()).find((n) => n !== s.number)!;
+  await s.b.getByRole('button', { name: wrong, exact: true }).click();
+  await expect(s.b.getByText('数字が違います')).toBeVisible();
+  // A's next poll sees the failed challenge: QR and number disappear, and it never reaches the app.
+  await expect(s.a.getByTestId('login-qr')).toBeHidden({ timeout: 10_000 });
+  await expect(s.a.getByTestId('login-number')).toBeHidden();
   await expect(s.a).not.toHaveURL(/settings/);
   await s.close();
 });

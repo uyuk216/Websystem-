@@ -54,14 +54,20 @@ MinIO のイメージは Docker Hub での配布が終わったため `quay.io/m
 
 API の IP 単位のレート制限が使うクライアント IP の決め方を指定します。
 
-- `0`（既定）：ソケットの接続元アドレスを使い、`X-Forwarded-For` は無視します（開発時・直接公開時）。
+- `0`（コード上の既定）：ソケットの接続元アドレスを使い、`X-Forwarded-For` は無視します。
 - `N`（1 以上）：`X-Forwarded-For` の右から N 番目の値を使います（信頼できるプロキシが N 段ある場合）。
 
-本番で Cloudflare / Traefik などのプロキシの背後に置く場合は必ず段数を設定してください。0 のままだと全クライアントがプロキシの IP を共有し、IP 単位の制限が事実上全体で 1 つの制限になります。
+開発環境（`.env.development.example`）の既定は `1` です。ブラウザからの API 呼び出しは Next の `/api` リライト（1 段のプロキシ、`X-Forwarded-For` を付与）を経由するためです。0 のままだと全クライアントがリライトの接続元（同一 IP）を共有し、IP 単位の制限が全体で 1 つになります。この設定のとき API（:3001 など）へ直接アクセスしてレート制限を試さないでください（`X-Forwarded-For` を自由に偽装できます）。
+
+本番では実際のプロキシ段数（Cloudflare / Traefik など）を必ず設定してください。段数が実際より少ないと全クライアントがプロキシの IP を共有し、多いと偽装を許します。
 
 ## Row Level Security and database roles
 
-Migration 0006 enables and FORCEs RLS on sessions, passkeys, login_events, teams, team_members and team_invites. The API runs authenticated queries as the NOLOGIN role `platform_api` (via `SET LOCAL ROLE`). Pre-auth flows and admin scripts (`withSystem`) run as the connecting owner role, so in production that role must be a SUPERUSER or have BYPASSRLS, and be allowed to `SET ROLE platform_api` (the migration grants this). The API checks this at startup and refuses to start otherwise.
+Migrations 0006/0007 enable and FORCE RLS on accounts, owners, sessions, passkeys, login_events, teams, team_members and team_invites; `platform_api` has no privileges on email_challenges, recovery_requests, recovery_attempts and webauthn_challenges (pre-auth tables, owner role only). The API runs authenticated queries as the NOLOGIN role `platform_api` (via `SET LOCAL ROLE`). Pre-auth flows and admin scripts (`withSystem`) run as the connecting owner role, so in production that role must be a SUPERUSER or have BYPASSRLS, and be allowed to `SET ROLE platform_api` (the migration grants this). The API checks this at startup and refuses to start otherwise.
+
+## Housekeeping
+
+`pnpm --filter api admin:purge` deletes expired/revoked sessions (30 days idle, 90 days absolute), old login events and spent WebAuthn challenges.
 
 ## CI
 

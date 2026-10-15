@@ -19,6 +19,8 @@ export const ja = {
   'common.email': 'メールアドレス',
   'common.next': '次へ',
   'common.back': '戻る',
+  'common.loadError': '読み込めませんでした。通信状況を確認して、もう一度お試しください。',
+  'common.retry': '再試行',
   'common.loading': '読み込み中…',
   'common.error': 'エラーが発生しました。もう一度お試しください。',
   'common.rateLimited': '操作が多すぎます。しばらくしてからお試しください。',
