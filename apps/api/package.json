@@ -13,7 +13,8 @@
     "./mailer": "./src/mail/mailer.ts",
     "./deployments": "./src/apps/deployments.ts",
     "./publish": "./src/ingest/publish.ts",
-    "./dynamic": "./src/ingest/dynamic.ts"
+    "./dynamic": "./src/ingest/dynamic.ts",
+    "./logs": "./src/apps/logs.ts"
   },
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/server.ts",

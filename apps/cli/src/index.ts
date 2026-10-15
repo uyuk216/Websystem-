@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
 import { parseArgs } from 'node:util';
 import { clearConfig, loadConfig, saveConfig } from './config.js';
-import { deploy, envList, envSet, envUnset, listApps } from './commands.js';
+import { deploy, envList, envSet, envUnset, listApps, appLogs } from './commands.js';
 
 const HELP = `Usage: yourservice <command>
 
@@ -13,6 +13,7 @@ Commands:
   env list --app <name>      List variable names (values are never shown)
   env set NAME=VALUE --app <name>   Set a variable; \`env set NAME --stdin\` reads the value from stdin
   env unset NAME --app <name>       Remove a variable (restart the app to apply changes)
+  logs --app <name> [--tail N]      Show the latest app output (default 100 lines, max 1000)
   logout                     Remove the saved token
 
 Environment:
@@ -63,7 +64,7 @@ export async function main(argv: string[], env: Record<string, string | undefine
     if (cmd === 'logout') { clearConfig(env); out.log('Logged out.'); return 0; }
     const cfg = loadConfig(env);
     if (!cfg) throw new Error('Not logged in. Run `yourservice login`.');
-    if (cmd === 'apps' || cmd === 'deploy' || cmd === 'env') checkApiUrl(api, insecure);
+    if (cmd === 'apps' || cmd === 'deploy' || cmd === 'env' || cmd === 'logs') checkApiUrl(api, insecure);
     if (cmd === 'apps') {
       for (const a of await listApps({ api, token: cfg.token })) out.log(a.name);
       return 0;
@@ -72,6 +73,14 @@ export async function main(argv: string[], env: Record<string, string | undefine
       const { values, positionals } = parseArgs({ args: rest, options: { app: { type: 'string' } }, allowPositionals: true });
       if (!values.app) throw new Error('Missing --app <name>.');
       await deploy({ api, token: cfg.token, dir: positionals[0] ?? '.', app: values.app, out });
+      return 0;
+    }
+    if (cmd === 'logs') {
+      const { values } = parseArgs({ args: rest, options: { app: { type: 'string' }, tail: { type: 'string' } } });
+      if (!values.app) throw new Error('Missing --app <name>.');
+      const tail = values.tail === undefined ? 100 : Number(values.tail);
+      if (!Number.isInteger(tail) || tail < 1 || tail > 1000) throw new Error('--tail must be an integer from 1 to 1000.');
+      for (const l of await appLogs({ api, token: cfg.token, app: values.app, tail })) out.log(l);
       return 0;
     }
     if (cmd === 'env') {

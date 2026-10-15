@@ -24,6 +24,7 @@ import { claimDelivery, deployPush, findPushTargets, parsePush, releaseDelivery,
 import { completeConnect, setGithub, startConnect } from '../github/link.js';
 import type { GithubClient } from '../github/client.js';
 import { getUsage } from '../usage/transfer.js';
+import { getAppLogs, listAccessLogs } from '../apps/logs.js';
 import { getRuntimeUsage } from '../usage/runtime-hours.js';
 import { createSession, listSessions, revokeSession } from '../auth/sessions.js';
 import { randomBytes } from 'node:crypto';
@@ -340,6 +341,15 @@ export function createApp(deps?: AppDeps): Hono {
         return 'error' in r ? c.json(r, depStatus[r.error]) : c.json(r);
       });
     }
+    app.get('/apps/:id/access-logs', session, async (c) => {
+      const r = await listAccessLogs(deps.db, c.get('accountId'), c.req.param('id'), Number(c.req.query('limit') ?? 100));
+      return 'error' in r ? c.json(r, 404) : c.json(r);
+    });
+    app.get('/apps/:id/logs', session, async (c) => {
+      if (!deps.runtime) return c.json({ error: 'runtime_disabled' }, 503);
+      const r = await getAppLogs(deps.db, deps.runtime, c.get('accountId'), c.req.param('id'), Number(c.req.query('tail') ?? 1000));
+      return 'error' in r ? c.json(r, r.error === 'forbidden' ? 403 : 404) : c.json(r);
+    });
     const appEnvKey = deps.config.appEnvKey;
     if (appEnvKey) {
       const envStatus: Record<EnvError, 400 | 403 | 404 | 413> = { not_found: 404, forbidden: 403, invalid_name: 400, reserved: 400, invalid_value: 400, too_large: 413, limit: 400 };

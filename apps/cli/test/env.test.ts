@@ -24,3 +24,16 @@ describe('env commands', () => {
     ]);
   });
 });
+
+describe('logs command', () => {
+  it('requests the tail and returns lines', async () => {
+    const calls: { method: string; url: string }[] = [];
+    const f = (async (u: string, init?: RequestInit) => {
+      calls.push({ method: init?.method ?? 'GET', url: u });
+      return u.endsWith('/apps') ? new Response(JSON.stringify({ apps: [{ id: 'app1', name: 'site' }] })) : new Response(JSON.stringify({ lines: ['a', 'b'] }));
+    }) as never;
+    const { appLogs } = await import('../src/commands.js');
+    expect(await appLogs({ api: 'http://localhost:3001', token: 't', app: 'site', tail: 50, fetch: f })).toEqual(['a', 'b']);
+    expect(calls.at(-1)!.url).toBe('http://localhost:3001/apps/app1/logs?tail=50');
+  });
+});

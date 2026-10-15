@@ -10,6 +10,7 @@ import type { Db } from 'api/db';
 import type { StoredObject } from 'platform';
 import type { Duplex } from 'node:stream';
 import type { Waker } from 'platform';
+import type { AccessLogger } from 'api/logs';
 import { proxyRequest, proxyUpgrade, type ProxyFailure } from './proxy.js';
 import { candidates, contentTypeFor, parsePath, pickLocale, resolveSite } from './site.js';
 
@@ -23,6 +24,8 @@ export interface StaticAppDeps {
   meter: Pick<TransferMeter, 'record' | 'isBlocked'>;
   baseDomain: string;
   now?: () => Date;
+  /** Access log sink (batched writes; never blocks a request). */
+  accessLog?: Pick<AccessLogger, 'record'>;
   /** How long a name -> live site lookup is reused (default 3s: a rollback or new deployment can take up to this long to show per static process). */
   siteCacheMs?: number;
   /** Dynamic apps. Without it, dynamic apps answer 503 (runtime disabled). */
@@ -214,6 +217,18 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
 
   const app = new Hono() as StaticApp;
   app.handleUpgrade = handleUpgrade;
+  app.use('*', async (c, next) => {
+    await next();
+    const appId = c.get('logAppId' as never) as string | undefined;
+    if (!appId || !deps.accessLog) return;
+    try {
+      const incoming = (c.env as { incoming?: IncomingMessage } | undefined)?.incoming;
+      deps.accessLog.record({
+        appId, method: c.req.method, path: rawPath(c), status: c.res.status, bytes: Number(c.res.headers.get('content-length') ?? 0) || 0,
+        userAgent: c.req.header('user-agent'), referrer: c.req.header('referer'), ip: incoming?.socket.remoteAddress ?? '',
+      });
+    } catch (e) { console.error('access log failed', e); }
+  });
   app.all('*', async (c) => {
     const headers = (extra: Record<string, string> = {}): Record<string, string> => ({ ...SECURITY_HEADERS, ...extra });
     const method = c.req.method;
@@ -221,11 +236,13 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
     const notFound = () => c.text('Not Found', 404, headers());
     if (method !== 'GET' && method !== 'HEAD') {
       const dyn = name ? await lookup(name) : null;
+      if (dyn) c.set('logAppId' as never, dyn.appId as never);
       if (dyn?.kind === 'dynamic') return proxyDynamic(c, dyn);
       return c.body('Method Not Allowed', 405, headers({ Allow: 'GET, HEAD' }));
     }
     if (!name) return notFound();
     const site0 = await lookup(name);
+    if (site0) c.set('logAppId' as never, site0.appId as never);
     if (site0?.kind === 'dynamic') return proxyDynamic(c, site0);
     const parsed = parsePath(rawPath(c));
     if ('status' in parsed && parsed.status === 400) return c.text('Bad Request', 400, headers());

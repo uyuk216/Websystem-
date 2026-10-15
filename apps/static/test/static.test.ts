@@ -244,3 +244,17 @@ describe('static server: transfer metering and limits', () => {
     expect((await get('/')).status).toBe(200);
   }));
 });
+
+describe('access log hook', () => {
+  it('records one entry per request for a known app and nothing for unknown hosts', () => withTestDb(async (db) => {
+    const s = await liveSite(db);
+    const entries: Array<{ appId: string; path: string; status: number }> = [];
+    const meter = createTransferMeter({ db, limitBytes: 10_000 });
+    const app = createStaticApp({ db, storage: memoryStorage(FILES(s.prefix)), meter, baseDomain: 'localhost', accessLog: { record: (e) => { entries.push(e); } } });
+    const get = (host: string, path: string) => app.request(`http://x${path}`, { headers: { host, 'user-agent': 'curl/8' } });
+    expect((await get('my-site.localhost', '/about.html?q=1')).status).toBe(200);
+    expect((await get('my-site.localhost', '/missing')).status).toBe(404);
+    expect((await get('nope.localhost', '/')).status).toBe(404);
+    expect(entries.map((e) => [e.appId, e.path, e.status])).toEqual([[s.appId, '/about.html', 200], [s.appId, '/missing', 404]]);
+  }));
+});

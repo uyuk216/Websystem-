@@ -83,3 +83,12 @@ export async function envUnset(b: Base & { app: string; name: string }): Promise
   if (res.status === 404) throw new Error(`${b.name} is not set.`);
   if (!res.ok) throw new Error(`Request failed (${res.status})`);
 }
+
+export async function appLogs(b: Base & { app: string; tail?: number }): Promise<string[]> {
+  const q = b.tail ? `?tail=${b.tail}` : '';
+  const res = await envRequest(b, 'GET', `/apps/${await appId(b, b.app)}/logs${q}`);
+  if (res.status === 503) throw new Error('The runtime is disabled; logs are unavailable.');
+  if (res.status === 403) throw new Error('You do not have permission to view logs for this app.');
+  if (!res.ok) throw new Error(`Request failed (${res.status})`);
+  return (await res.json() as { lines: string[] }).lines;
+}

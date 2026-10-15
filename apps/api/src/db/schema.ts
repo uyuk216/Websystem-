@@ -250,3 +250,17 @@ export const runtimeUsage = pgTable('runtime_usage', {
   primaryKey({ columns: [t.ownerId, t.period] }),
   check('runtime_usage_period_format_check', sql`${t.period} ~ '^([0-9]{4}-(0[1-9]|1[0-2])|FY[0-9]{4})$'`),
 ]);
+
+/** One row per request served by the edge (static and dynamic). IP is masked; kept 30 days; written only by the edge (system). */
+export const accessLogs = pgTable('access_logs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  method: text('method').notNull(),
+  path: text('path').notNull(),
+  status: integer('status').notNull(),
+  bytes: bigint('bytes', { mode: 'number' }).notNull().default(0),
+  uaKind: text('ua_kind').notNull(),
+  referrer: text('referrer'),
+  ipPrefix: text('ip_prefix').notNull(),
+}, (t) => [index('access_logs_app_created_idx').on(t.appId, t.createdAt.desc())]);
