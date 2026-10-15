@@ -1,7 +1,7 @@
 import { and, count, desc, eq } from 'drizzle-orm';
 import { STATIC_LIMITS, can, validateAppName, type TeamRole } from 'shared';
 import { withAccount, withSystem, type Db, type Tx } from '../db/client.js';
-import { apps, deployments, owners, teamMembers } from '../db/schema.js';
+import { apps, deployments, owners, teamMembers, teams } from '../db/schema.js';
 import { UUID } from '../auth/cross-device.js';
 
 export type CreateAppError = 'format' | 'reserved' | 'taken' | 'forbidden' | 'limit';
@@ -109,4 +109,13 @@ export async function findLiveSite(db: Db, name: string): Promise<{ appId: strin
       .innerJoin(deployments, and(eq(deployments.id, apps.activeDeploymentId), eq(deployments.appId, apps.id)))
       .where(eq(apps.name, name)));
   return r?.siteKey ? { appId: r.appId, siteKey: r.siteKey } : null;
+}
+
+/** Owners the account can create apps for: its own account owner plus every team it belongs to (RLS-scoped). */
+export async function listOwners(db: Db, accountId: string) {
+  return withAccount(db, accountId, async (tx) => {
+    const rows = await tx.select({ id: owners.id, kind: owners.kind, teamName: teams.name })
+      .from(owners).leftJoin(teams, eq(teams.id, owners.teamId));
+    return rows.map((r) => ({ id: r.id, kind: r.kind, name: r.teamName }));
+  });
 }

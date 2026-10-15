@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { accounts, deployments, teamMembers } from '../src/db/schema.js';
 import { createTeam, ensureAccountOwner } from '../src/teams/teams.js';
-import { createApp, deleteApp, getApp, listApps, updateApp } from '../src/apps/apps.js';
+import { createApp, deleteApp, getApp, listApps, listOwners, updateApp } from '../src/apps/apps.js';
 import { createApp as createHttpApp } from '../src/http/app.js';
 import { createFakeMailer } from './helpers/fake-mailer.js';
 import { createSession } from '../src/auth/sessions.js';
@@ -16,6 +16,16 @@ async function acct(db: TestDb) {
 }
 
 describe('apps', () => {
+  it('lists only the owners the account can act for', () => withTestDb(async (db) => {
+    const a = await acct(db);
+    const b = await acct(db);
+    const team = await createTeam(db, a.id, 'Club');
+    const mine = await listOwners(db, a.id);
+    expect(mine.map((o) => o.id).sort()).toEqual([a.ownerId, team.ownerId].sort());
+    expect(mine.find((o) => o.id === team.ownerId)).toMatchObject({ kind: 'team', name: 'Club' });
+    expect((await listOwners(db, b.id)).map((o) => o.id)).toEqual([b.ownerId]);
+  }));
+
   it('creates, lists, gets, updates and deletes', () => withTestDb(async (db) => {
     const a = await acct(db);
     const r = await createApp(db, a.id, { name: 'my-site', ownerId: a.ownerId });

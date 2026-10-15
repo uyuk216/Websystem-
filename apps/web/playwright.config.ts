@@ -26,5 +26,12 @@ export default defineConfig({
       timeout: 120_000,
       env: { API_ORIGIN: 'http://localhost:3001' },
     },
+    {
+      // Deployment processing (worker) and the static site server (:8090) run together.
+      command: 'pnpm -r --parallel --filter worker --filter static dev',
+      port: 8090,
+      reuseExistingServer: false,
+      timeout: 60_000,
+    },
   ],
 });

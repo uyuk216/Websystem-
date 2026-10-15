@@ -17,6 +17,13 @@ export function errorKey(code: string): MessageKey {
     case 'forbidden': return 'teams.forbidden';
     case 'full': return 'teams.full';
     case 'last_owner': return 'teams.lastOwner';
+    case 'format': return 'apps.format';
+    case 'reserved': return 'apps.reserved';
+    case 'taken': return 'apps.taken';
+    case 'limit': return 'apps.limit';
+    case 'invalid_type': return 'deploy.invalidType';
+    case 'too_large': return 'deploy.tooLarge';
+    case 'not_found': return 'apps.notFound';
     case 'invalid': return 'common.invalid';
     default: return 'common.error';
   }

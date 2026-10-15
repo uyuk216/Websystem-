@@ -39,7 +39,7 @@ export async function signUp(page: Page, email: string, locale: 'ja' | 'en' = 'j
   await page.locator('form button[type=submit]').click();
   const recovery = (await page.getByTestId('recovery-code').textContent())!;
   await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: locale === 'ja' ? '次へ' : 'Next' }).click();
+  await page.getByRole('button', { name: locale === 'ja' ? '次へ' : 'Next', exact: true }).click();
   await page.getByRole('button', { name: locale === 'ja' ? 'あとで登録する' : 'Skip for now' }).click();
   await page.waitForURL(/settings\/devices/);
   return recovery;
