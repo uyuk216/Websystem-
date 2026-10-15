@@ -2,6 +2,7 @@ import { createQueue, createStorage, loadStorageConfig, startQueue } from 'platf
 import { createDb } from 'api/db';
 import { sweepStaleDeployments } from 'api/publish';
 import { createDynamicRuntime } from 'api/dynamic';
+import { sleepIdleApps } from 'api/wake';
 import { defaultHandlers, registerHandlers } from './worker.js';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -20,6 +21,14 @@ const sweep = () => sweepStaleDeployments(db).then((n) => { if (n > 0) console.l
 await sweep();
 const sweepTimer = setInterval(() => void sweep(), 10 * 60_000);
 sweepTimer.unref();
+
+// Dynamic apps idle longer than DYNAMIC_LIMITS.sleepAfterMinutes are stopped (the edge wakes them on demand).
+// Safe with several workers: each app is stopped under its wake lock.
+if (runtime) {
+  const sleepTick = () => sleepIdleApps(db, runtime.driver).then((ids) => { for (const id of ids) console.log(`worker: app ${id} went to sleep`); }, (e: unknown) => console.error('worker: sleep sweep failed', e));
+  const sleepTimer = setInterval(() => void sleepTick(), 60_000);
+  sleepTimer.unref();
+}
 console.log('worker: waiting for jobs');
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {

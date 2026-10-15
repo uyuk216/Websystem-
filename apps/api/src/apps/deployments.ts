@@ -226,7 +226,7 @@ export async function rollback(
       ));
     }
     await tx.update(deployments).set({ status: 'live' }).where(eq(deployments.id, d.id));
-    await tx.update(apps).set({ activeDeploymentId: d.id, rolledBackAt: sql`now()` }).where(eq(apps.id, appId));
+    await tx.update(apps).set({ activeDeploymentId: d.id, rolledBackAt: sql`now()`, lastAccessAt: sql`now()` }).where(eq(apps.id, appId));
     return { ok: true as const, stop: old.map((r) => r.id) };
   });
   if ('error' in switched) {

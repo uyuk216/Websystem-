@@ -9,3 +9,4 @@ export * from './build/detect.js';
 export * from './build/dockerfiles.js';
 export * from './build/build.js';
 export * from './runtime/rollout.js';
+export * from './runtime/waker.js';

@@ -157,6 +157,8 @@ export const apps = pgTable('apps', {
   activeDeploymentId: uuid('active_deployment_id'),
   /** Set by rollback: deployments created before this moment may no longer go live. */
   rolledBackAt: timestamp('rolled_back_at', { withTimezone: true }),
+  /** Dynamic apps: last proxied request (written by the edge at most once a minute); drives sleep. */
+  lastAccessAt: timestamp('last_access_at', { withTimezone: true }),
   githubRepo: text('github_repo'),
   githubBranch: text('github_branch'),
   githubInstallationId: text('github_installation_id'),

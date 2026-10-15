@@ -158,6 +158,8 @@ export const ja = {
   'deploy.upload.tooLarge': 'ファイルが大きすぎます（上限 200MB）。',
   'transfer.limitTitle': '今月の転送量の上限に達しました',
   'transfer.limitBody': 'このサイトは今月の転送量の上限に達したため、月末まで表示できません。サイトの持ち主にお知らせください。',
+  'dynamic.startFailedTitle': 'アプリを起動できませんでした',
+  'dynamic.startFailedBody': 'このアプリはスリープ中で、30 秒以内に起動できませんでした。しばらくしてからもう一度お試しいただくか、アプリの持ち主にお知らせください。',
   'transfer.warnSubject': '{app} の今月の転送量が 80% に達しました',
   'transfer.warnBody': 'サイト「{app}」の今月の転送量が上限（{limit}）の 80% に達しました（現在 {used}）。上限に達すると月末まで HTTP 503 を返して公開を一時停止します。',
   'nav.apps': 'アプリ',

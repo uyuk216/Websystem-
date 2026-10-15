@@ -1,0 +1,1 @@
+ALTER TABLE "apps" ADD COLUMN "last_access_at" timestamp with time zone;

@@ -5,7 +5,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createWriteStream } from 'node:fs';
 import { eq, sql } from 'drizzle-orm';
-import { DockerDriver, buildImage, collectLogs, detectStack, extractArchive, removeImage, waitHealthy, type ArchiveFormat, type HealthOptions, type RuntimeDriver, type Storage } from 'platform';
+import { DockerDriver, buildImage, collectLogs, detectStack, extractArchive, removeImage, waitHealthy, type AppRunSpec, type ArchiveFormat, type HealthOptions, type RuntimeDriver, type Storage } from 'platform';
 import { DYNAMIC_LIMITS } from 'shared';
 import { withSystem, type Db } from '../db/client.js';
 import { getAppEnvForRun } from '../apps/env-vars.js';
@@ -74,7 +74,20 @@ export function createDynamicRuntime(env: NodeJS.ProcessEnv): DynamicRuntime | u
   return { driver: new DockerDriver(), envKey };
 }
 
-const limits = { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids };
+export const runLimits = { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids };
+
+/**
+ * The run spec for a deployment (decrypted env + PORT), shared by the rollout and the edge waking a sleeping app.
+ * Null when the deployment has no image (or does not belong to the app).
+ */
+export async function buildRunSpec(db: Db, rt: DynamicRuntime, appId: string, deploymentId: string): Promise<AppRunSpec | null> {
+  const [d] = await withSystem(db, (tx) => tx.select({ imageRef: deployments.imageRef, ownerId: apps.ownerId })
+    .from(deployments).innerJoin(apps, eq(apps.id, deployments.appId))
+    .where(sql`${deployments.id} = ${deploymentId} AND ${deployments.appId} = ${appId}`));
+  if (!d?.imageRef) return null;
+  const env = await getAppEnvForRun(db, rt.envKey, appId);
+  return { appId, deploymentId, ownerId: d.ownerId, image: d.imageRef, env: { ...env, PORT: String(CONTAINER_PORT) }, limits: runLimits, port: CONTAINER_PORT };
+}
 
 /**
  * Starts the deployment's image as a new container next to the running one, health-checks it and, only if
@@ -102,7 +115,7 @@ export async function rolloutDynamic(db: Db, deploymentId: string, rt?: DynamicR
   let started = false;
   try {
     env = await getAppEnvForRun(db, rt.envKey, appId);
-    await driver.start({ appId, deploymentId, ownerId: d.ownerId, image: imageRef, env: { ...env, PORT: String(CONTAINER_PORT) }, limits, port: CONTAINER_PORT });
+    await driver.start({ appId, deploymentId, ownerId: d.ownerId, image: imageRef, env: { ...env, PORT: String(CONTAINER_PORT) }, limits: runLimits, port: CONTAINER_PORT });
     started = true;
     const health = await waitHealthy(driver, appId, deploymentId, rt.health);
     if (!health.ok) {
@@ -136,7 +149,7 @@ export async function rolloutDynamic(db: Db, deploymentId: string, rt?: DynamicR
       }
       const old = await tx.execute<{ id: string }>(sql`UPDATE deployments SET status = 'superseded' WHERE app_id = ${appId} AND status = 'live' RETURNING id`);
       await tx.update(deployments).set({ ...done, status: 'live' }).where(eq(deployments.id, deploymentId));
-      await tx.update(apps).set({ activeDeploymentId: deploymentId }).where(eq(apps.id, appId));
+      await tx.update(apps).set({ activeDeploymentId: deploymentId, lastAccessAt: new Date() }).where(eq(apps.id, appId));
       return old.map((r) => r.id);
     });
     if (stopOld === null) {

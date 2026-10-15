@@ -1,8 +1,10 @@
 import { serve } from '@hono/node-server';
-import { createStorage, loadStorageConfig } from 'platform';
+import { Waker, createStorage, loadStorageConfig } from 'platform';
 import { createDb } from 'api/db';
 import { createMailer } from 'api/mailer';
 import { createTransferMeter } from 'api/transfer';
+import { buildRunSpec, createDynamicRuntime } from 'api/dynamic';
+import { withWakeLock } from 'api/wake';
 import { createStaticApp } from './app.js';
 
 const need = (n: string): string => {
@@ -20,10 +22,24 @@ const mailer = createMailer(need('SMTP_URL'), process.env.MAIL_FROM || 'no-reply
 const meter = createTransferMeter({ db, mailer, emailKey });
 meter.start();
 
-const app = createStaticApp({ db, storage: storage.sites, meter, baseDomain });
+// Dynamic apps: DYNAMIC_RUNTIME=off disables them (503); otherwise APP_ENV_KEY is required to start apps.
+const runtime = createDynamicRuntime(process.env);
+const dynamic = runtime && {
+  waker: new Waker({
+    driver: runtime.driver,
+    buildSpec: (appId, deploymentId) => buildRunSpec(db, runtime, appId, deploymentId),
+    withLock: (appId, fn) => withWakeLock(db, appId, fn),
+    health: runtime.health,
+  }),
+  proto: process.env.EDGE_PROTO === 'http' ? ('http' as const) : ('https' as const),
+};
+
+const app = createStaticApp({ db, storage: storage.sites, meter, baseDomain, dynamic });
 const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`static listening on :${info.port} (*.${baseDomain})`);
 });
+
+server.on('upgrade', (req, socket, head) => app.handleUpgrade(req, socket, head));
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
