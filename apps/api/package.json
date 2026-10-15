@@ -10,6 +10,7 @@
     "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/server.ts",
     "start": "node --env-file-if-exists=../../.env.development --import tsx src/server.ts",
     "db:generate": "drizzle-kit generate",
+    "admin:approve-recovery": "node --env-file-if-exists=../../.env.development --import tsx src/scripts/approve-recovery.ts",
     "db:migrate": "node --env-file-if-exists=../../.env.development --import tsx src/db/migrate.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
@@ -17,10 +18,13 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.1.5",
+    "@node-rs/argon2": "^2.2.2",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",
+    "i18n": "workspace:*",
     "nodemailer": "^10.1.1",
-    "postgres": "^3.4.9"
+    "postgres": "^3.4.9",
+    "shared": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

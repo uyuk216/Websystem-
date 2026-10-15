@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
-  bigint, check, customType, integer, pgTable, primaryKey, text, timestamp, uuid,
+  bigint, check, customType, index, integer, pgTable, primaryKey, text, timestamp, uuid,
 } from 'drizzle-orm/pg-core';
 
 const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
@@ -72,6 +72,12 @@ export const recoveryRequests = pgTable('recovery_requests', {
   createdAt: createdAt(),
   decidedAt: timestamp('decided_at', { withTimezone: true }),
 });
+
+export const recoveryAttempts = pgTable('recovery_attempts', {
+  id: id(),
+  emailHash: text('email_hash').notNull(),
+  createdAt: createdAt(),
+}, (t) => [index('recovery_attempts_email_hash_created_at_idx').on(t.emailHash, t.createdAt)]);
 
 export const teams = pgTable('teams', {
   id: id(),
