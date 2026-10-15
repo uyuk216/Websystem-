@@ -9,6 +9,8 @@ export interface Config {
   rpId: string;
   port: number;
   trustedProxyHops: number;
+  /** GitHub App settings; present only when all three GITHUB_* variables are set. */
+  github?: { appId: string; privateKey: string; webhookSecret: string; clientId: string; clientSecret: string };
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -36,6 +38,13 @@ export function parseHops(raw: string | undefined): number {
   return Number(raw);
 }
 
+function loadGithub(env: NodeJS.ProcessEnv): Config['github'] {
+  const { GITHUB_APP_ID: appId, GITHUB_APP_PRIVATE_KEY: key, GITHUB_WEBHOOK_SECRET: webhookSecret, GITHUB_CLIENT_ID: clientId, GITHUB_CLIENT_SECRET: clientSecret } = env;
+  if (!appId || !key || !webhookSecret || !clientId || !clientSecret) return undefined;
+  // PEM keys are often stored in env files with literal "\n".
+  return { appId, privateKey: key.replace(/\\n/g, '\n'), webhookSecret, clientId, clientSecret };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   return {
     databaseUrl: required(env, 'DATABASE_URL'),
@@ -48,5 +57,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     rpId: required(env, 'RP_ID'),
     port: parsePort(env.PORT),
     trustedProxyHops: parseHops(env.TRUSTED_PROXY_HOPS),
+    github: loadGithub(env),
   };
 }
