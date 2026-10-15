@@ -188,7 +188,12 @@ function notifyOwner(opts: MeterRuntimeOptions, ownerId: string, p: Period, used
 
 /** Starts the once-a-minute metering loop (idempotent per minute, safe with several workers). */
 export function startRuntimeMetering(opts: MeterRuntimeOptions, intervalMs = 60_000): () => void {
-  const tick = () => void meterRuntime(opts).catch((e) => console.error('runtime metering tick failed', e));
+  let running = false; // a slow tick must not overlap the next one
+  const tick = () => {
+    if (running) return;
+    running = true;
+    void meterRuntime(opts).catch((e) => console.error('runtime metering tick failed', e)).finally(() => { running = false; });
+  };
   const timer = setInterval(tick, intervalMs);
   timer.unref();
   return () => clearInterval(timer);
@@ -209,4 +214,12 @@ export async function getRuntimeUsage(db: Db, accountId: string, appId: string, 
     const of = (p: Period): RuntimePeriodUsage => ({ period: p.key, minutes: rows.find((r) => r.period === p.key)?.minutes ?? 0, limitMinutes: p.limit });
     return { month: of(m), fiscalYear: of(fy) };
   });
+}
+
+export const RUNTIME_MINUTES_RETENTION_DAYS = 400;
+/** Deletes raw per-minute records older than the retention (the owner counters are kept). Returns the number of rows. */
+export async function purgeRuntimeMinutes(db: Db, now: Date = new Date(), days = RUNTIME_MINUTES_RETENTION_DAYS): Promise<number> {
+  const cutoff = new Date(now.getTime() - days * 86_400_000);
+  const rows = await withSystem(db, (tx) => tx.delete(runtimeMinutes).where(sql`${runtimeMinutes.minute} < ${cutoff.toISOString()}::timestamptz`).returning({ appId: runtimeMinutes.appId }));
+  return rows.length;
 }

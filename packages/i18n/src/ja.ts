@@ -148,6 +148,7 @@ export const ja = {
   'deploy.error.build_timeout': 'ビルドが 15 分を超えたため中止しました。',
   'deploy.error.image_too_large': 'ビルドしたイメージが 1GB を超えています。',
   'deploy.error.build_failed': 'ビルドに失敗しました。ビルドログを確認してください。',
+  'deploy.error.runtime_limit': '持ち主の稼働時間が上限に達しているため、次の期間までアプリを起動できません。',
   'deploy.error.app_exited': 'アプリが起動直後に停止しました。環境変数 PORT（8080）で待ち受けているか確認してください。',
   'deploy.error.health_check_failed': 'アプリが 30 秒以内にポート 8080 で応答しませんでした。環境変数 PORT で待ち受けているか確認してください。',
   'deploy.error.internal': '処理中にエラーが発生しました。もう一度お試しください。',

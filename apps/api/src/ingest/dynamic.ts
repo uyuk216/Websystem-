@@ -10,6 +10,7 @@ import { DYNAMIC_LIMITS } from 'shared';
 import { withSystem, type Db } from '../db/client.js';
 import { getAppEnvForRun } from '../apps/env-vars.js';
 import { apps, deployments } from '../db/schema.js';
+import { runtimeBlockedUntil } from '../usage/runtime-hours.js';
 import { LIMITS, entryPath, inspect, relativeToPublishDir } from './inspect.js';
 
 export type DynamicJob = {
@@ -60,7 +61,7 @@ export interface DynamicRuntime {
   envKey: Buffer;
   health?: HealthOptions;
   /** Cross-process per-app lock (see createWakeLocker). Held by rollouts so the sleeper and edge wakes never race them. */
-  lock?: <T>(appId: string, fn: () => Promise<T>) => Promise<T>;
+  lock?: <T>(appId: string, fn: () => Promise<T>, opts?: { timeoutMs?: number }) => Promise<T>;
 }
 
 /**
@@ -118,6 +119,15 @@ export async function rolloutDynamic(db: Db, deploymentId: string, rt?: DynamicR
   let env: Record<string, string> = {};
   let started = false;
   try {
+    // An owner who used up their runtime hours cannot start anything until the period rolls over.
+    if (await runtimeBlockedUntil(db, d.ownerId)) {
+      await withSystem(db, async (tx) => {
+        await tx.update(deployments).set({ status: 'failed', imageRef: null, finishedAt: new Date(), message: 'deploy.error.runtime_limit' })
+          .where(sql`${deployments.id} = ${deploymentId} AND ${deployments.status} = 'processing'`);
+      });
+      await removeImage(imageRef).catch(() => undefined);
+      return;
+    }
     // An app being deployed counts as accessed, so it is not put to sleep right after going live.
     await withSystem(db, (tx) => tx.update(apps).set({ lastAccessAt: new Date() }).where(eq(apps.id, appId)));
     env = await getAppEnvForRun(db, rt.envKey, appId);

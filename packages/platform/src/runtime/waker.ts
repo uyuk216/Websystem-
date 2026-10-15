@@ -15,7 +15,7 @@ export interface WakerOptions {
    * Cross-process mutual exclusion per app (e.g. a Postgres advisory lock on a dedicated pool). Defaults to none
    * (single process). `fn` only talks to the driver: the run spec is built before the lock is taken.
    */
-  withLock?<T>(appId: string, fn: () => Promise<T>): Promise<T>;
+  withLock?<T>(appId: string, fn: () => Promise<T>, opts?: { timeoutMs?: number }): Promise<T>;
   health?: HealthOptions;
   timeoutMs?: number;
   /** How long a known-good endpoint is reused without asking the driver (default 5s). */
@@ -49,12 +49,21 @@ export class Waker {
     this.maxWakes = opts.maxConcurrentWakes ?? 8;
   }
 
-  private async acquire(): Promise<void> {
+  /** Takes a wake slot, waiting in line until `deadline`; false when the deadline came first. */
+  private async acquire(deadline: number): Promise<boolean> {
     if (this.activeWakes < this.maxWakes) {
       this.activeWakes++;
-      return;
+      return true;
     }
-    await new Promise<void>((resolve) => this.queue.push(resolve)); // the slot is handed over, activeWakes unchanged
+    return new Promise<boolean>((resolve) => {
+      const grant = () => { clearTimeout(timer); resolve(true); }; // the slot is handed over, activeWakes unchanged
+      const timer = setTimeout(() => {
+        const i = this.queue.indexOf(grant);
+        if (i !== -1) this.queue.splice(i, 1);
+        resolve(false);
+      }, Math.max(0, deadline - Date.now()));
+      this.queue.push(grant);
+    });
   }
 
   private release(): void {
@@ -104,15 +113,28 @@ export class Waker {
 
   private async wake(appId: string, deploymentId: string, deadline: number): Promise<WakeResult> {
     const { driver } = this.opts;
-    await this.acquire();
+    const left = () => Math.max(0, deadline - Date.now());
+    /** Everything that can wait (queue, spec, lock, start) is bounded by the wake deadline. */
+    const within = async <T>(p: Promise<T>): Promise<T | typeof TIMED_OUT> => {
+      let t: NodeJS.Timeout | undefined;
+      try {
+        return await Promise.race([p, new Promise<typeof TIMED_OUT>((r) => { t = setTimeout(() => r(TIMED_OUT), left()); })]);
+      } finally { clearTimeout(t); }
+    };
+    if (!(await this.acquire(deadline))) return { ok: false, reason: 'timeout' };
     try {
-      if (Date.now() >= deadline) return { ok: false, reason: 'timeout' };
-      if ((await driver.status(appId, deploymentId)) === 'running') {
-        const ep = await driver.endpoint(appId, deploymentId);
-        if (ep) return { ok: true, ...ep };
-      }
+      const quick = await within((async (): Promise<WakeResult | null> => {
+        if ((await driver.status(appId, deploymentId)) === 'running') {
+          const ep = await driver.endpoint(appId, deploymentId);
+          if (ep) return { ok: true, ...ep };
+        }
+        return null;
+      })());
+      if (quick === TIMED_OUT) return { ok: false, reason: 'timeout' };
+      if (quick) return quick;
       // Built before the lock: nothing inside the lock needs a database connection.
-      const spec = await this.opts.buildSpec(appId, deploymentId);
+      const spec = await within(this.opts.buildSpec(appId, deploymentId));
+      if (spec === TIMED_OUT) return { ok: false, reason: 'timeout' };
       const run = async (): Promise<WakeResult> => {
         // Another process may have woken the app while we waited for the lock.
         if ((await driver.status(appId, deploymentId)) === 'running') {
@@ -120,10 +142,10 @@ export class Waker {
           if (ep) return { ok: true, ...ep };
         }
         if (!spec) return { ok: false, reason: 'missing' };
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) return { ok: false, reason: 'timeout' };
-        await driver.start(spec);
-        const health = await waitHealthy(driver, appId, deploymentId, { ...this.opts.health, timeoutMs: Math.min(this.opts.health?.timeoutMs ?? remaining, Math.max(1, deadline - Date.now())) });
+        if (left() <= 0) return { ok: false, reason: 'timeout' };
+        const started = await within(driver.start(spec));
+        if (started === TIMED_OUT) return { ok: false, reason: 'timeout' };
+        const health = await waitHealthy(driver, appId, deploymentId, { ...this.opts.health, timeoutMs: Math.min(this.opts.health?.timeoutMs ?? left(), Math.max(1, left())) });
         if (!health.ok) {
           await driver.stopDeployment(appId, deploymentId).catch(() => undefined);
           return { ok: false, reason: health.reason === 'timeout' ? 'timeout' : 'failed' };
@@ -131,9 +153,16 @@ export class Waker {
         const ep = await driver.endpoint(appId, deploymentId);
         return ep ? { ok: true, ...ep } : { ok: false, reason: 'failed' };
       };
-      return await (this.opts.withLock ? this.opts.withLock(appId, run) : run());
+      try {
+        return await (this.opts.withLock ? this.opts.withLock(appId, run, { timeoutMs: left() }) : run());
+      } catch (e) {
+        if ((e as Error).message === 'wake_lock_timeout') return { ok: false, reason: 'timeout' };
+        throw e;
+      }
     } finally {
       this.release();
     }
   }
 }
+
+const TIMED_OUT = Symbol('timed out');

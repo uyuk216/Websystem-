@@ -4,6 +4,7 @@ import { Hono, type Context } from 'hono';
 import type { IncomingMessage } from 'node:http';
 import { t } from 'i18n';
 import { findLiveApp, touchLastAccess, type LiveApp } from 'api/wake';
+import { runtimeBlockedUntil } from 'api/runtime-hours';
 import { secondsUntilNextMonth, type TransferMeter } from 'api/transfer';
 import type { Db } from 'api/db';
 import type { StoredObject } from 'platform';
@@ -32,6 +33,8 @@ export interface StaticAppDeps {
     touchIntervalMs?: number;
     /** Protocol clients use to reach the edge, sent as X-Forwarded-Proto (default https: a TLS proxy sits in front). */
     proto?: 'http' | 'https';
+    /** Until when the owner's runtime hours are used up (null = not blocked). Default: runtime_usage counters, cached 30s. */
+    blockedUntil?: (ownerId: string) => Promise<Date | null>;
   };
 }
 
@@ -121,11 +124,35 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
     });
   };
 
+  const blockCache = new Map<string, { at: number; until: Date | null }>();
+  async function blockedUntil(ownerId: string): Promise<Date | null> {
+    const hit = blockCache.get(ownerId);
+    if (hit && Date.now() - hit.at < 30_000) return hit.until;
+    const until = await (deps.dynamic?.blockedUntil ?? ((o: string) => runtimeBlockedUntil(deps.db, o, now())))(ownerId);
+    blockCache.set(ownerId, { at: Date.now(), until });
+    if (blockCache.size > 5000) blockCache.clear();
+    return until;
+  }
+  /** 503 "runtime limit reached" page with the date the app comes back (JST calendar date). */
+  const runtimeLimitPage = (c: Context, until: Date) => {
+    const locale = pickLocale(c.req.header('accept-language'));
+    const j = new Date(until.getTime() + 9 * 3600_000);
+    const date = locale === 'ja'
+      ? `${j.getUTCFullYear()}年${j.getUTCMonth() + 1}月${j.getUTCDate()}日`
+      : `${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][j.getUTCMonth()]} ${j.getUTCDate()}, ${j.getUTCFullYear()}`;
+    return c.html(page(t(locale, 'runtime.limitTitle'), t(locale, 'runtime.limitBody', { until: date }), locale), 503, {
+      ...SECURITY_HEADERS, 'Retry-After': String(Math.max(1, Math.ceil((until.getTime() - now().getTime()) / 1000))), 'Cache-Control': 'no-store',
+    });
+  };
+
   async function proxyDynamic(c: Context, site: Extract<LiveApp, { kind: 'dynamic' }>): Promise<Response> {
     const incoming = (c.env as { incoming?: IncomingMessage } | undefined)?.incoming;
     if (!incoming) return c.text('Internal Server Error', 500);
     if (await deps.meter.isBlocked(site.appId)) return limitPage(c);
     if (!deps.dynamic) return startFailed(c);
+    // Never wake (or keep serving) an app whose owner used up their runtime hours.
+    const until = await blockedUntil(site.ownerId);
+    if (until) return runtimeLimitPage(c, until);
     touch(site.appId);
     // A client that leaves while the app is starting must not make the edge connect to the app afterwards.
     const abort = new AbortController();
@@ -168,6 +195,8 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
       if (!site || site.kind !== 'dynamic') return reply('404 Not Found');
       if (await deps.meter.isBlocked(site.appId)) return reply('503 Service Unavailable');
       if (!deps.dynamic) return reply('503 Service Unavailable');
+      if (await blockedUntil(site.ownerId)) return reply('503 Service Unavailable');
+      if (closed) return;
       touch(site.appId);
       const woke = await deps.dynamic.waker.ensure(site.appId, site.deploymentId);
       if (closed || socket.destroyed) return; // the client left while the app was starting

@@ -150,6 +150,7 @@ export const en = {
   'deploy.error.build_timeout': 'The build took longer than 15 minutes and was stopped.',
   'deploy.error.image_too_large': 'The built image is larger than 1GB.',
   'deploy.error.build_failed': 'The build failed. See the build log.',
+  'deploy.error.runtime_limit': 'The owner has reached their runtime limit, so the app cannot be started until the next period.',
   'deploy.error.app_exited': 'The app stopped right after it started. Make sure it listens on the PORT environment variable (8080).',
   'deploy.error.health_check_failed': 'The app did not respond on port 8080 within 30 seconds. Make sure it listens on the PORT environment variable.',
   'deploy.error.internal': 'An error occurred while processing. Please try again.',

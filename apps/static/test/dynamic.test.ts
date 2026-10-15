@@ -6,12 +6,13 @@ import postgres from 'postgres';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Waker, type AppRunSpec, type RuntimeDriver, type RuntimeStatus } from 'platform';
 import { withTestDb, type TestDb } from '../../api/test/helpers/db.js';
-import { accounts, apps, deployments } from '../../api/src/db/schema.js';
+import { accounts, apps, deployments, runtimeUsage } from '../../api/src/db/schema.js';
 import { ensureAccountOwner } from '../../api/src/teams/teams.js';
 import { createApp } from '../../api/src/apps/apps.js';
+import { jstMonthKey, MONTHLY_LIMIT_MINUTES } from '../../api/src/usage/runtime-hours.js';
 import { sleepIdleApps } from '../../api/src/apps/wake.js';
 import { rolloutDynamic, buildRunSpec, type DynamicRuntime } from '../../api/src/ingest/dynamic.js';
-import { closeLockers, openLocker } from '../../api/test/helpers/lockdb.js';
+import { closeLockers, holdWakeLock, openLocker } from '../../api/test/helpers/lockdb.js';
 import { randomBytes } from 'node:crypto';
 import { connect } from 'node:net';
 import { createTransferMeter } from '../../api/src/usage/transfer.js';
@@ -77,18 +78,19 @@ const echoBackend = () => createServer((req, res) => {
   });
 });
 
-async function edge(db: TestDb, fd: ReturnType<typeof fakeDriver>, o: { limit?: number; timeoutMs?: number; withLock?: boolean; touchMs?: number } = {}) {
+async function edge(db: TestDb, fd: ReturnType<typeof fakeDriver>, o: { limit?: number; timeoutMs?: number; withLock?: boolean; touchMs?: number; maxWakes?: number; blockedUntil?: (ownerId: string) => Promise<Date | null> } = {}) {
   const meter = createTransferMeter({ db, limitBytes: o.limit ?? 10_000_000, limitCacheMs: 0 });
   const waker = new Waker({
     driver: fd.driver,
     buildSpec: async (appId, deploymentId) => ({ appId, deploymentId, ownerId: '00000000-0000-4000-8000-000000000000', image: 'img', env: {}, limits: { memoryMb: 1, cpu: 1, pids: 1 }, port: 8080 }),
     health: { intervalMs: 20, timeoutMs: o.timeoutMs ?? 5000 },
     timeoutMs: o.timeoutMs ?? 5000,
+    ...(o.maxWakes ? { maxConcurrentWakes: o.maxWakes } : {}),
     ...(o.withLock ? { withLock: (await openLocker(db)).lock } : {}),
   });
   const touches: string[] = [];
   const app = createStaticApp({ db, storage: { get: async () => null }, meter, baseDomain: 'localhost', siteCacheMs: 0,
-    dynamic: { waker, touch: async (id) => { touches.push(id); }, touchIntervalMs: o.touchMs ?? 60_000 } });
+    dynamic: { waker, touch: async (id) => { touches.push(id); }, touchIntervalMs: o.touchMs ?? 60_000, ...(o.blockedUntil ? { blockedUntil: o.blockedUntil } : {}) } });
   const server = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' });
   server.on('upgrade', (req, socket, head) => app.handleUpgrade(req, socket, head));
   await new Promise((r) => setTimeout(r, 20));
@@ -426,4 +428,38 @@ describe('sleeper versus rollout', () => {
     expect(after!.active).toBe(nd!.id);
     expect(fd.state.stops).toBe(0);
   }), 30_000);
+});
+
+describe('fix round 2', () => {
+  it('wake slots and lock waits are bounded by the wake deadline: a full house of locked apps answers 503 and frees its slots', () => withTestDb(async (db) => {
+    const apps3 = [] as Array<{ appId: string }>;
+    for (const n of ['lock-a', 'lock-b', 'free-c', 'free-d']) apps3.push(await dynamicApp(db, n));
+    const release = [await holdWakeLock(db, apps3[0]!.appId), await holdWakeLock(db, apps3[1]!.appId)];
+    const fd = fakeDriver(echoBackend);
+    const e = await edge(db, fd, { withLock: true, timeoutMs: 700, maxWakes: 2 });
+    const t0 = Date.now();
+    const rs = await Promise.all(['lock-a', 'lock-b', 'free-c'].map((n) => fetch(`${e.base}/`, { headers: { host: `${n}.localhost` } })));
+    expect(rs.map((r) => r.status)).toEqual([503, 503, 503]); // two blocked on locks, one waiting for a slot
+    expect(Date.now() - t0).toBeLessThan(3000);
+    // The blocked wakes gave up (lock_timeout) and freed their slots even though the locks are still held.
+    await new Promise((r) => setTimeout(r, 300));
+    expect((await fetch(`${e.base}/`, { headers: { host: 'free-d.localhost' } })).status).toBe(200);
+    for (const r of release) await r();
+  }), 30_000);
+
+  it('serves the runtime-limit page (ja/en, with the date) and never wakes an app whose owner used up their hours', () => withTestDb(async (db) => {
+    const s = await dynamicApp(db);
+    const [a] = await db.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, s.appId));
+    await db.insert(runtimeUsage).values({ ownerId: a!.ownerId, period: jstMonthKey(new Date()), minutes: MONTHLY_LIMIT_MINUTES });
+    const fd = fakeDriver(echoBackend);
+    const e = await edge(db, fd);
+    const ja = await fetch(`${e.base}/`, { headers: H });
+    expect(ja.status).toBe(503);
+    expect(await ja.text()).toMatch(/稼働時間の上限に達しました[\s\S]*\d+年\d+月1日/);
+    expect(Number(ja.headers['retry-after'])).toBeGreaterThan(0);
+    const en = await fetch(`${e.base}/`, { headers: { ...H, 'accept-language': 'en' } });
+    expect(en.status).toBe(503);
+    expect(await en.text()).toMatch(/Runtime limit reached[\s\S]*, 20\d\d/);
+    expect(fd.state.starts).toBe(0);
+  }));
 });

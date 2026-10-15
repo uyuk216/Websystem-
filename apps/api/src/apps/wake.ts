@@ -6,16 +6,16 @@ import { apps, deployments } from '../db/schema.js';
 
 export type LiveApp =
   | { kind: 'static'; appId: string; siteKey: string }
-  | { kind: 'dynamic'; appId: string; deploymentId: string };
+  | { kind: 'dynamic'; appId: string; deploymentId: string; ownerId: string };
 
 /** Read-only lookup for the edge: what the app name currently serves (static site or dynamic deployment). */
 export async function findLiveApp(db: Db, name: string): Promise<LiveApp | null> {
   const [r] = await withSystem(db, (tx) =>
-    tx.select({ appId: apps.id, kind: apps.kind, deploymentId: deployments.id, siteKey: deployments.siteKey, imageRef: deployments.imageRef }).from(apps)
+    tx.select({ appId: apps.id, ownerId: apps.ownerId, kind: apps.kind, deploymentId: deployments.id, siteKey: deployments.siteKey, imageRef: deployments.imageRef }).from(apps)
       .innerJoin(deployments, and(eq(deployments.id, apps.activeDeploymentId), eq(deployments.appId, apps.id)))
       .where(eq(apps.name, name)));
   if (!r) return null;
-  if (r.kind === 'dynamic') return r.imageRef ? { kind: 'dynamic', appId: r.appId, deploymentId: r.deploymentId } : null;
+  if (r.kind === 'dynamic') return r.imageRef ? { kind: 'dynamic', appId: r.appId, deploymentId: r.deploymentId, ownerId: r.ownerId } : null;
   return r.siteKey ? { kind: 'static', appId: r.appId, siteKey: r.siteKey } : null;
 }
 
@@ -27,9 +27,17 @@ export async function touchLastAccess(db: Db, appId: string): Promise<void> {
  * Runs `fn` while holding a database-wide lock for the app, so that only one process wakes (or puts to sleep)
  * an app at a time. The lock is released when the transaction ends.
  */
-export async function withWakeLock<T>(db: Db, appId: string, fn: () => Promise<T>): Promise<T> {
+export async function withWakeLock<T>(db: Db, appId: string, fn: () => Promise<T>, opts: { timeoutMs?: number } = {}): Promise<T> {
   return withSystem(db, async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wake:${appId}`}, 0))`);
+    // Waiting for the lock is bounded: a holder that takes too long must not pin this connection forever.
+    if (opts.timeoutMs !== undefined) await tx.execute(sql`SELECT set_config('lock_timeout', ${`${Math.max(1, Math.floor(opts.timeoutMs))}ms`}, true)`);
+    try {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`wake:${appId}`}, 0))`);
+    } catch (e) {
+      const code = (e as { code?: string; cause?: { code?: string } }).code ?? (e as { cause?: { code?: string } }).cause?.code;
+      if (code === '55P03') throw new Error('wake_lock_timeout', { cause: e });
+      throw e;
+    }
     return fn();
   });
 }
@@ -40,9 +48,10 @@ export async function withWakeLock<T>(db: Db, appId: string, fn: () => Promise<T
  * the main pool's connections for anything that the lock holder waits on, and the main pool must not be able
  * to run dry because wakes are in progress.
  */
-export function createWakeLocker(url: string, max = 8): { lock: <T>(appId: string, fn: () => Promise<T>) => Promise<T>; close: () => Promise<void> } {
+export type WakeLock = <T>(appId: string, fn: () => Promise<T>, opts?: { timeoutMs?: number }) => Promise<T>;
+export function createWakeLocker(url: string, max = 8): { lock: WakeLock; close: () => Promise<void> } {
   const { db, sql } = createDb(url, { max });
-  return { lock: (appId, fn) => withWakeLock(db, appId, fn), close: () => sql.end() };
+  return { lock: (appId, fn, opts) => withWakeLock(db, appId, fn, opts), close: () => sql.end() };
 }
 
 /**

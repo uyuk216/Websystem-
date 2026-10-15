@@ -7,6 +7,7 @@ import { UUID } from '../auth/cross-device.js';
 import { withAccount, withSystem, type Db, type Tx } from '../db/client.js';
 import { apps, deployments } from '../db/schema.js';
 import { mayManage } from './apps.js';
+import { runtimeBlockedUntil } from '../usage/runtime-hours.js';
 import { getAppEnvForRun } from './env-vars.js';
 import { CONTAINER_PORT, type DynamicRuntime } from '../ingest/dynamic.js';
 
@@ -16,7 +17,7 @@ export interface JobQueue {
 }
 export type DeploySource = 'upload' | 'cli' | 'github';
 export type CreateDeploymentError = 'not_found' | 'forbidden' | 'too_large' | 'invalid';
-export type RollbackError = 'not_found' | 'forbidden' | 'invalid_state' | 'start_failed';
+export type RollbackError = 'not_found' | 'forbidden' | 'invalid_state' | 'start_failed' | 'runtime_limit';
 
 export const DOWNLOAD_TIMEOUT_MS = 120_000;
 
@@ -188,24 +189,32 @@ export async function rollback(
   let started = false;
   if (pre.kind === 'dynamic') {
     if (!rt || !pre.imageRef) return { error: 'invalid_state' };
-    try {
-      const env = await getAppEnvForRun(db, rt.envKey, appId);
-      await rt.driver.start({
-        appId, deploymentId, ownerId: pre.ownerId, image: pre.imageRef, env: { ...env, PORT: String(CONTAINER_PORT) },
-        limits: { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids }, port: CONTAINER_PORT,
-      });
-      started = true;
-      const health = await waitHealthy(rt.driver, appId, deploymentId, rt.health);
-      if (!health.ok) {
-        const logs = await collectLogs(rt.driver, appId, deploymentId, Object.values(env));
-        if (!pre.wasLive) await rt.driver.stopDeployment(appId, deploymentId);
-        return { error: 'start_failed', reason: health.reason === 'exited' ? 'deploy.error.app_exited' : 'deploy.error.health_check_failed', logs };
+    if (await runtimeBlockedUntil(db, pre.ownerId)) return { error: 'runtime_limit' };
+    const imageRef = pre.imageRef;
+    // Under the app's wake lock (like a rollout), so the sleeper and the edge never race the start.
+    const startTarget = async (): Promise<{ error: RollbackError; reason?: string; logs?: string[] } | null> => {
+      try {
+        const env = await getAppEnvForRun(db, rt.envKey, appId);
+        await rt.driver.start({
+          appId, deploymentId, ownerId: pre.ownerId, image: imageRef, env: { ...env, PORT: String(CONTAINER_PORT) },
+          limits: { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids }, port: CONTAINER_PORT,
+        });
+        started = true;
+        const health = await waitHealthy(rt.driver, appId, deploymentId, rt.health);
+        if (!health.ok) {
+          const logs = await collectLogs(rt.driver, appId, deploymentId, Object.values(env));
+          if (!pre.wasLive) await rt.driver.stopDeployment(appId, deploymentId);
+          return { error: 'start_failed', reason: health.reason === 'exited' ? 'deploy.error.app_exited' : 'deploy.error.health_check_failed', logs };
+        }
+        return null;
+      } catch (e) {
+        if (started && !pre.wasLive) await rt.driver.stopDeployment(appId, deploymentId).catch(() => undefined);
+        console.error('rollback start failed', appId, deploymentId, e);
+        return { error: 'start_failed' };
       }
-    } catch (e) {
-      if (started && !pre.wasLive) await rt.driver.stopDeployment(appId, deploymentId).catch(() => undefined);
-      console.error('rollback start failed', appId, deploymentId, e);
-      return { error: 'start_failed' };
-    }
+    };
+    const failed = await (rt.lock ? rt.lock(appId, startTarget) : startTarget());
+    if (failed) return failed;
   }
 
   const switched = await withAccount(db, accountId, async (tx) => {

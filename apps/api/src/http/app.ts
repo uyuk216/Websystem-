@@ -303,7 +303,7 @@ export function createApp(deps?: AppDeps): Hono {
     if (deps.storage && deps.queue) {
       const storage = deps.storage;
       const queue = deps.queue;
-      const depStatus = { not_found: 404, forbidden: 403, too_large: 413, invalid: 400, invalid_state: 409, start_failed: 502 } as const;
+      const depStatus = { not_found: 404, forbidden: 403, too_large: 413, invalid: 400, invalid_state: 409, start_failed: 502, runtime_limit: 409 } as const;
       // Multipart overhead on top of the archive limit; the exact archive size is enforced while streaming.
       const uploadLimit = bodyLimit({
         maxSize: (deps.uploadMaxBytes ?? STATIC_LIMITS.storageBytes) + 1024 * 1024,
