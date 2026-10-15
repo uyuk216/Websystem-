@@ -343,7 +343,7 @@ export function createApp(deps?: AppDeps): Hono {
     }
     app.get('/apps/:id/access-logs', session, async (c) => {
       const r = await listAccessLogs(deps.db, c.get('accountId'), c.req.param('id'), Number(c.req.query('limit') ?? 100));
-      return 'error' in r ? c.json(r, 404) : c.json(r);
+      return 'error' in r ? c.json(r, r.error === 'forbidden' ? 403 : 404) : c.json(r);
     });
     app.get('/apps/:id/logs', session, async (c) => {
       if (!deps.runtime) return c.json({ error: 'runtime_disabled' }, 503);

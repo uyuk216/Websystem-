@@ -49,8 +49,9 @@ server.on('upgrade', (req, socket, head) => app.handleUpgrade(req, socket, head)
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
-    server.close();
-    void Promise.all([meter.stop(), accessLog.stop()]).finally(() => {
+    // Flush access logs only after the server has fully closed so in-flight requests are recorded.
+    const closed = new Promise<void>((resolve) => { server.close(() => resolve()); });
+    void closed.then(() => Promise.all([meter.stop(), accessLog.stop()])).finally(() => {
       void locker?.close();
       storage.close();
       void sql.end();

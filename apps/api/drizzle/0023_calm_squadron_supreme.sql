@@ -1,0 +1,1 @@
+CREATE INDEX "access_logs_created_idx" ON "access_logs" USING btree ("created_at");

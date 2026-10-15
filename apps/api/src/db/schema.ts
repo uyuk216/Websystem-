@@ -263,4 +263,4 @@ export const accessLogs = pgTable('access_logs', {
   uaKind: text('ua_kind').notNull(),
   referrer: text('referrer'),
   ipPrefix: text('ip_prefix').notNull(),
-}, (t) => [index('access_logs_app_created_idx').on(t.appId, t.createdAt.desc())]);
+}, (t) => [index('access_logs_app_created_idx').on(t.appId, t.createdAt.desc()), index('access_logs_created_idx').on(t.createdAt)]);

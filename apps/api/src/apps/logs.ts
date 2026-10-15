@@ -1,4 +1,4 @@
-import { and, desc, eq, lt } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt } from 'drizzle-orm';
 import { collectLogs } from 'platform';
 import { withAccount, withSystem, type Db } from '../db/client.js';
 import { maskIp } from '../auth/login-history.js';
@@ -33,6 +33,13 @@ export function createAccessLogger(db: Db, opts: { flushMs?: number; maxBuffer?:
   let buf: Array<typeof accessLogs.$inferInsert> = [];
   const max = opts.maxBuffer ?? 5000;
   let timer: NodeJS.Timeout | undefined;
+  let dropped = 0;
+  let lastWarn = 0;
+  function noteDropped(n: number): void {
+    dropped += n;
+    const now = Date.now();
+    if (now - lastWarn >= 60_000) { lastWarn = now; console.warn(`access log buffer full: dropped ${dropped} rows so far`); }
+  }
   async function flush(): Promise<void> {
     if (buf.length === 0) return;
     const rows = buf;
@@ -41,11 +48,16 @@ export function createAccessLogger(db: Db, opts: { flushMs?: number; maxBuffer?:
       await withSystem(db, async (tx) => { for (let i = 0; i < rows.length; i += 500) await tx.insert(accessLogs).values(rows.slice(i, i + 500)); });
     } catch (e) {
       console.error('access log write failed', e);
+      // Re-queue at the front (older first); beyond the cap the oldest rows are dropped and counted.
+      const merged = rows.concat(buf);
+      const over = merged.length - max;
+      buf = over > 0 ? merged.slice(over) : merged;
+      if (over > 0) noteDropped(over);
     }
   }
   return {
     record(e: AccessEntry): void {
-      if (buf.length >= max) return; // shed load rather than grow without bound
+      if (buf.length >= max) { noteDropped(1); return; } // shed load rather than grow without bound
       buf.push({
         appId: e.appId, createdAt: e.at ?? new Date(), method: e.method.slice(0, 16), path: e.path.slice(0, 2000), status: e.status,
         bytes: Math.max(0, Math.round(e.bytes)), uaKind: uaKind(e.userAgent), referrer: referrerOrigin(e.referrer), ipPrefix: maskIp(e.ip),
@@ -59,16 +71,23 @@ export function createAccessLogger(db: Db, opts: { flushMs?: number; maxBuffer?:
 export type AccessLogger = ReturnType<typeof createAccessLogger>;
 
 export async function purgeOldAccessLogs(db: Db, now: Date): Promise<number> {
-  const rows = await withSystem(db, (tx) => tx.delete(accessLogs).where(lt(accessLogs.createdAt, new Date(now.getTime() - ACCESS_LOG_RETENTION_MS))).returning({ id: accessLogs.id }));
-  return rows.length;
+  const cutoff = new Date(now.getTime() - ACCESS_LOG_RETENTION_MS);
+  let total = 0;
+  for (;;) {
+    const ids = await withSystem(db, (tx) => tx.select({ id: accessLogs.id }).from(accessLogs).where(lt(accessLogs.createdAt, cutoff)).limit(10_000));
+    if (ids.length === 0) return total;
+    await withSystem(db, (tx) => tx.delete(accessLogs).where(inArray(accessLogs.id, ids.map((r) => r.id))));
+    total += ids.length;
+  }
 }
 
 export async function listAccessLogs(db: Db, accountId: string, appId: string, limit = 100) {
   if (!UUID.test(appId)) return { error: 'not_found' as const };
   const n = Math.min(MAX_TAIL, Math.max(1, Math.floor(limit) || 100));
   return withAccount(db, accountId, async (tx) => {
-    const [a] = await tx.select({ id: apps.id }).from(apps).where(eq(apps.id, appId));
+    const [a] = await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId));
     if (!a) return { error: 'not_found' as const };
+    if (!(await mayManage(tx, accountId, a.ownerId))) return { error: 'forbidden' as const };
     const logs = await tx.select({
       at: accessLogs.createdAt, method: accessLogs.method, path: accessLogs.path, status: accessLogs.status, bytes: accessLogs.bytes,
       uaKind: accessLogs.uaKind, referrer: accessLogs.referrer, ipPrefix: accessLogs.ipPrefix,
