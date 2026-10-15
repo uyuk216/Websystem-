@@ -182,7 +182,7 @@ describe('usage read model', () => {
     const get = (tok: string, path: string) => http.request(path, { headers: { cookie: `sid=${tok}` } });
     const ok = await get(sa.token, `/apps/${id}/usage`);
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toEqual({ month, bytes: 5, limitBytes: 10 * 1024 ** 3 });
+    expect(await ok.json()).toMatchObject({ month, bytes: 5, limitBytes: 10 * 1024 ** 3 });
     expect((await get(sb.token, `/apps/${id}/usage`)).status).toBe(404);
     expect((await get(sa.token, '/apps/not-a-uuid/usage')).status).toBe(404);
   }));

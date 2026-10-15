@@ -2,6 +2,8 @@ import { createQueue, createStorage, loadStorageConfig, startQueue } from 'platf
 import { createDb } from 'api/db';
 import { sweepStaleDeployments } from 'api/publish';
 import { createDynamicRuntime } from 'api/dynamic';
+import { startRuntimeMetering } from 'api/runtime-hours';
+import { createMailer } from 'api/mailer';
 import { defaultHandlers, registerHandlers } from './worker.js';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -20,6 +22,12 @@ const sweep = () => sweepStaleDeployments(db).then((n) => { if (n > 0) console.l
 await sweep();
 const sweepTimer = setInterval(() => void sweep(), 10 * 60_000);
 sweepTimer.unref();
+// Runtime-hour metering: one tick per minute (idempotent per app-minute, so several workers do not double count).
+if (runtime) {
+  const emailKey = process.env.EMAIL_ENC_KEY ? Buffer.from(process.env.EMAIL_ENC_KEY, 'base64') : undefined;
+  const mailer = process.env.SMTP_URL ? createMailer(process.env.SMTP_URL, process.env.MAIL_FROM || 'no-reply@localhost') : undefined;
+  startRuntimeMetering({ db, driver: runtime.driver, mailer, emailKey });
+}
 console.log('worker: waiting for jobs');
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {

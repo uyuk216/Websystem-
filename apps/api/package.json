@@ -8,6 +8,7 @@
     "./db": "./src/db/client.ts",
     "./apps": "./src/apps/apps.ts",
     "./transfer": "./src/usage/transfer.ts",
+    "./runtime-hours": "./src/usage/runtime-hours.ts",
     "./mailer": "./src/mail/mailer.ts",
     "./deployments": "./src/apps/deployments.ts",
     "./publish": "./src/ingest/publish.ts",

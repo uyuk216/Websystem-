@@ -24,6 +24,7 @@ import { claimDelivery, deployPush, findPushTargets, parsePush, releaseDelivery,
 import { completeConnect, setGithub, startConnect } from '../github/link.js';
 import type { GithubClient } from '../github/client.js';
 import { getUsage } from '../usage/transfer.js';
+import { getRuntimeUsage } from '../usage/runtime-hours.js';
 import { createSession, listSessions, revokeSession } from '../auth/sessions.js';
 import { randomBytes } from 'node:crypto';
 import { getCookie, setCookie } from 'hono/cookie';
@@ -282,7 +283,9 @@ export function createApp(deps?: AppDeps): Hono {
     });
     app.get('/apps/:id/usage', session, async (c) => {
       const u = await getUsage(deps.db, c.get('accountId'), c.req.param('id'));
-      return u ? c.json(u) : c.json({ error: 'not_found' }, 404);
+      if (!u) return c.json({ error: 'not_found' }, 404);
+      const runtime = await getRuntimeUsage(deps.db, c.get('accountId'), c.req.param('id'));
+      return c.json({ ...u, runtime });
     });
     app.patch('/apps/:id', session, async (c) => {
       const b = await jsonBody(c);
