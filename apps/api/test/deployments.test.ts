@@ -238,4 +238,59 @@ describe('deployments', () => {
     expect(jobs.at(-1)).toEqual({ name: JOBS.deleteAppStorage, data: { appId } });
     await cleanup(appId);
   }));
+
+  it('infrastructure error: throws for retry (row stays processing), then a retry goes live; last attempt records failure', () => withTestDb(async (db) => {
+    const { a, appId } = await setup(db);
+    const id = await deploy(db, a, appId, { 'index.html': 'x' });
+    let fail = 1;
+    const flaky = { ...storage, sites: { ...storage.sites, put: async (...args: Parameters<Storage['sites']['put']>) => {
+      if (fail-- > 0) throw new Error('boom');
+      return storage.sites.put(...args);
+    } } } as Storage;
+    await expect(processDeployment(db, flaky, id)).rejects.toThrow('boom');
+    expect((await row(db, id)).status).toBe('processing');
+    await processDeployment(db, flaky, id);
+    expect((await row(db, id)).status).toBe('live');
+    const id2 = await deploy(db, a, appId, { 'index.html': 'y' });
+    fail = 5;
+    await processDeployment(db, flaky, id2, { lastAttempt: true });
+    expect(await row(db, id2)).toMatchObject({ status: 'failed', message: 'deploy.error.internal' });
+    await cleanup(appId);
+  }));
+
+  it('app deleted mid-publish: published files are removed', () => withTestDb(async (db) => {
+    const { a, appId } = await setup(db);
+    const id = await deploy(db, a, appId, { 'index.html': 'x' });
+    const hooked = { ...storage, sites: { ...storage.sites, put: async (...args: Parameters<Storage['sites']['put']>) => {
+      await storage.sites.put(...args);
+      await db.delete(apps).where(eq(apps.id, appId));
+    } } } as Storage;
+    await processDeployment(db, hooked, id);
+    expect(await storage.sites.list(`${appId}/`)).toEqual([]);
+    await cleanup(appId);
+  }));
+
+  it('rollback pins: an older queued deployment finishing afterwards cannot override the rolled-back version', () => withTestDb(async (db) => {
+    const { a, appId } = await setup(db);
+    const d1 = await deploy(db, a, appId, { 'index.html': '1' });
+    await processDeployment(db, storage, d1);
+    const d2 = await deploy(db, a, appId, { 'index.html': '2' });
+    const slow = await deploy(db, a, appId, { 'index.html': '3' });
+    await db.update(deployments).set({ createdAt: new Date(Date.now() - 120_000) }).where(eq(deployments.id, d1));
+    await db.update(deployments).set({ createdAt: new Date(Date.now() - 60_000) }).where(eq(deployments.id, d2));
+    await processDeployment(db, storage, d2);
+    expect(await rollback(db, a.id, appId, d1)).toEqual({ ok: true });
+    await processDeployment(db, storage, slow); // created before the rollback
+    expect(await active(db, appId)).toBe(d1);
+    expect((await row(db, slow)).status).toBe('superseded');
+    const later = await deploy(db, a, appId, { 'index.html': '4' });
+    await processDeployment(db, storage, later); // created after: goes live
+    expect(await active(db, appId)).toBe(later);
+    await cleanup(appId);
+  }));
+
+  it('deleteApp still succeeds when enqueueing cleanup fails', () => withTestDb(async (db) => {
+    const { a, appId } = await setup(db);
+    expect(await deleteApp(db, a.id, appId, { enqueueStorageCleanup: async () => { throw new Error('queue down'); } })).toEqual({ ok: true });
+  }));
 });

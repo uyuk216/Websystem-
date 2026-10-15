@@ -96,6 +96,8 @@ export async function deleteApp(
     await tx.delete(apps).where(eq(apps.id, appId));
     return { ok: true as const };
   });
-  if ('ok' in r) await opts.enqueueStorageCleanup?.(appId);
+  if ('ok' in r) {
+    try { await opts.enqueueStorageCleanup?.(appId); } catch (e) { console.error('storage cleanup enqueue failed', appId, e); }
+  }
   return r;
 }

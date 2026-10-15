@@ -144,6 +144,8 @@ export const apps = pgTable('apps', {
   kind: text('kind', { enum: ['static'] }).notNull().default('static'),
   publishDir: text('publish_dir').notNull().default(''),
   activeDeploymentId: uuid('active_deployment_id'),
+  /** Set by rollback: deployments created before this moment may no longer go live. */
+  rolledBackAt: timestamp('rolled_back_at', { withTimezone: true }),
   githubRepo: text('github_repo'),
   githubBranch: text('github_branch'),
   githubInstallationId: text('github_installation_id'),

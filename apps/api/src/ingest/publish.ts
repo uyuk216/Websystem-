@@ -76,7 +76,9 @@ async function publishFiles(storage: Storage, sourceKey: string, format: Archive
  * the same app is already live, switches the app to it. Runs as the system role (no account context).
  * Every outcome, including unexpected errors, is recorded on the deployment (status + i18n message key).
  */
-export async function processDeployment(db: Db, storage: Storage, deploymentId: string): Promise<void> {
+export async function processDeployment(
+  db: Db, storage: Storage, deploymentId: string, opts: { lastAttempt?: boolean } = {},
+): Promise<void> {
   if (!UUID.test(deploymentId)) return;
   const claimed = await withSystem(db, async (tx) => {
     const rows = await tx.execute<{ app_id: string; source_key: string; publish_dir: string }>(sql`
@@ -109,13 +111,20 @@ export async function processDeployment(db: Db, storage: Storage, deploymentId: 
     await publishFiles(storage, sourceKey, format, claimed.publish_dir, siteKey);
     await withSystem(db, async (tx) => {
       // Serialises with other finishing deployments and with rollbacks of this app.
-      const [app] = await tx.select({ id: apps.id }).from(apps).where(eq(apps.id, appId)).for('update');
-      if (!app) return; // app deleted meanwhile; its storage cleanup job removes the files
+      const [app] = await tx.select({ id: apps.id, rolledBackAt: apps.rolledBackAt }).from(apps).where(eq(apps.id, appId)).for('update');
+      if (!app) { // app deleted meanwhile: remove what this run published
+        await storage.sites.deletePrefix(siteKey);
+        return;
+      }
       const done = { siteKey, totalBytes: out.bytes, fileCount: out.files, finishedAt: new Date(), message: null };
       const newer = await tx.execute(sql`
         SELECT 1 FROM deployments WHERE app_id = ${appId} AND status = 'live'
           AND (created_at, id) > (SELECT created_at, id FROM deployments WHERE id = ${deploymentId}) LIMIT 1`);
-      if (newer.length > 0) {
+      // A rollback after this deployment was created pins the rolled-back version: older uploads must not override it.
+      const [rb] = await tx.execute<{ stale: boolean }>(sql`
+        SELECT (a.rolled_back_at IS NOT NULL AND d.created_at <= a.rolled_back_at) AS stale FROM apps a, deployments d
+        WHERE a.id = ${appId} AND d.id = ${deploymentId}`);
+      if (newer.length > 0 || rb?.stale) {
         await tx.update(deployments).set({ ...done, status: 'superseded' }).where(eq(deployments.id, deploymentId));
         return;
       }
@@ -126,8 +135,10 @@ export async function processDeployment(db: Db, storage: Storage, deploymentId: 
   } catch (e) {
     await storage.sites.deletePrefix(siteKey).catch(() => undefined);
     if (e instanceof ArchiveError) return await finish({ status: 'failed', message: `deploy.error.${e.code}` });
+    // Infrastructure error: let the queue retry; only the last attempt records the failure.
+    if (!opts.lastAttempt) throw e;
     console.error('processDeployment failed', deploymentId, e);
-    await finish({ status: 'failed', message: 'deploy.error.internal' }).catch(() => undefined);
+    await finish({ status: 'failed', message: 'deploy.error.internal' });
   }
 }
 

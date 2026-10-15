@@ -1,0 +1,1 @@
+ALTER TABLE "apps" ADD COLUMN "rolled_back_at" timestamp with time zone;

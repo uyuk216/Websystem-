@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Transform, type Readable } from 'node:stream';
-import { and, desc, eq, ne } from 'drizzle-orm';
+import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import { BUCKETS, JOBS, appPrefix, type ArchiveFormat, type Storage } from 'platform';
 import { STATIC_LIMITS } from 'shared';
 import { UUID } from '../auth/cross-device.js';
@@ -104,7 +104,7 @@ export async function rollback(
     await tx.update(deployments).set({ status: 'superseded' })
       .where(and(eq(deployments.appId, appId), eq(deployments.status, 'live'), ne(deployments.id, d.id)));
     await tx.update(deployments).set({ status: 'live' }).where(eq(deployments.id, d.id));
-    await tx.update(apps).set({ activeDeploymentId: d.id }).where(eq(apps.id, appId));
+    await tx.update(apps).set({ activeDeploymentId: d.id, rolledBackAt: sql`now()` }).where(eq(apps.id, appId));
     return { ok: true as const };
   });
 }

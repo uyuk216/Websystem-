@@ -64,6 +64,13 @@
       "when": 1792071688358,
       "tag": "0008_noisy_mordo",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792073142224,
+      "tag": "0009_dry_lady_deathstrike",
+      "breakpoints": true
     }
   ]
 }

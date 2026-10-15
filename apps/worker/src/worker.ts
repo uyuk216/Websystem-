@@ -1,8 +1,8 @@
 import { deleteAppStorage, processDeployment } from 'api/publish';
 import type { Db } from 'api/db';
-import { JOBS, type JobName, type PgBoss, type Storage } from 'platform';
+import { DEPLOY_RETRY_LIMIT, JOBS, type JobName, type PgBoss, type Storage } from 'platform';
 
-export type JobHandler = (data: unknown) => Promise<void>;
+export type JobHandler = (data: unknown, ctx?: { lastAttempt: boolean }) => Promise<void>;
 export type Handlers = Record<JobName, JobHandler>;
 
 /** Job handlers. `flushTransfer` is still a placeholder (Task 5). */
@@ -22,9 +22,9 @@ const field = (data: unknown, name: string): string | null => {
   const v = (data as Record<string, unknown> | null)?.[name];
   return typeof v === 'string' && UUID_RE.test(v) ? v : null;
 };
-const makeProcessDeployment = (d: { db: Db; storage: Storage }): JobHandler => async (data) => {
+const makeProcessDeployment = (d: { db: Db; storage: Storage }): JobHandler => async (data, ctx) => {
   const id = field(data, 'deploymentId');
-  if (id) await processDeployment(d.db, d.storage, id);
+  if (id) await processDeployment(d.db, d.storage, id, { lastAttempt: ctx?.lastAttempt ?? false });
 };
 const makeDeleteAppStorage = (d: { storage: Storage }): JobHandler => async (data) => {
   const id = field(data, 'appId');
@@ -35,7 +35,7 @@ const makeDeleteAppStorage = (d: { storage: Storage }): JobHandler => async (dat
 export async function registerHandlers(boss: PgBoss, handlers: Handlers): Promise<void> {
   for (const name of Object.values(JOBS)) {
     await boss.work(name, async (jobs) => {
-      for (const job of jobs) await handlers[name](job.data);
+      for (const job of jobs) await handlers[name](job.data, { lastAttempt: name !== JOBS.processDeployment || job.retryCount >= DEPLOY_RETRY_LIMIT });
     });
   }
 }
