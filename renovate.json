@@ -1,0 +1,19 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "rangeStrategy": "pin",
+  "timezone": "Asia/Tokyo",
+  "schedule": ["before 6am on monday"],
+  "packageRules": [
+    {
+      "description": "Group all non-major updates into one weekly PR",
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "all non-major dependencies"
+    },
+    {
+      "description": "Majors get their own PRs",
+      "matchUpdateTypes": ["major"],
+      "groupName": null
+    }
+  ]
+}

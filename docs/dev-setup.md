@@ -62,3 +62,7 @@ API の IP 単位のレート制限が使うクライアント IP の決め方�
 ## Row Level Security and database roles
 
 Migration 0006 enables and FORCEs RLS on sessions, passkeys, login_events, teams, team_members and team_invites. The API runs authenticated queries as the NOLOGIN role `platform_api` (via `SET LOCAL ROLE`). Pre-auth flows and admin scripts (`withSystem`) run as the connecting owner role, so in production that role must be a SUPERUSER or have BYPASSRLS, and be allowed to `SET ROLE platform_api` (the migration grants this). The API checks this at startup and refuses to start otherwise.
+
+## CI
+
+`.github/workflows/ci.yml` を参照。ubuntu は PostgreSQL / Mailpit をサービスコンテナで起動して全テストと E2E を実行します。macOS は Docker が無いため lint・typecheck と shared / i18n のテストのみです。gitleaks（設定は `.gitleaks.toml`）と `pnpm audit --audit-level=high` も実行します。依存更新は Renovate（`renovate.json`）が毎週月曜 6 時前にまとめて PR を作ります。

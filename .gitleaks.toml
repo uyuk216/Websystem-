@@ -1,0 +1,15 @@
+title = "websystem gitleaks config"
+
+[extend]
+useDefault = true
+
+# .env.development.example の開発専用ダミー鍵のみを許可する（ファイル全体は許可しない）。
+[[allowlists]]
+description = "dev-only example keys in .env.development.example"
+condition = "AND"
+paths = ['''^\.env\.development\.example$''']
+regexes = [
+  '''^(EMAIL_ENC_KEY|EMAIL_HASH_KEY)=ZGV2LW9ubHktW[A-Za-z0-9+/=]*$''',
+  '''ZGV2LW9ubHktZW5jLWtleS0zMi1ieXRlcy1sb25nISE=''',
+  '''ZGV2LW9ubHktaGFzaC1rZXktMzItYnl0ZXMtbG9uZyE=''',
+]
