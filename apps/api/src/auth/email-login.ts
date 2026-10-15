@@ -60,14 +60,19 @@ export async function startEmailChallenge(
   if (!challengeId) return { error: 'rate_limited' };
 
   // Fire-and-forget so latency does not reveal whether a mail was sent (account existence).
-  let mail: Promise<void> | null = null;
+  let send: (() => Promise<void>) | null = null;
   if (input.purpose === 'signup' && account) {
-    mail = mailer.sendMail(email, t(input.locale, 'login.existsSubject'), t(input.locale, 'login.existsBody', { origin: cfg.appOrigin }));
+    const subject = t(input.locale, 'login.existsSubject');
+    const body = t(input.locale, 'login.existsBody', { origin: cfg.appOrigin });
+    send = () => mailer.sendMail(email, subject, body);
   } else if (input.purpose === 'signup' || account) {
     const link = `${cfg.appOrigin}/login/link?c=${challengeId}&t=${token}`;
-    mail = mailer.sendMail(email, t(input.locale, 'login.mailSubject'), t(input.locale, 'login.mailBody', { code, link }));
+    const subject = t(input.locale, 'login.mailSubject');
+    const body = t(input.locale, 'login.mailBody', { code, link });
+    send = () => mailer.sendMail(email, subject, body);
   }
-  mail?.catch((err: unknown) => console.error('email challenge mail failed', err));
+  // Promise.resolve().then also catches synchronous throws from sendMail.
+  if (send) void Promise.resolve().then(send).catch((err: unknown) => console.error('email challenge mail failed', err));
   return { challengeId };
 }
 

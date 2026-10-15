@@ -117,6 +117,20 @@ describe('mail dispatch', () => {
   });
 });
 
+describe('mail failure', () => {
+  it('synchronous sendMail throw is swallowed', async () => {
+    await withTestDb(async (db) => {
+      await mkAccount(db, 'foo@example.com');
+      const bad = { sendMail: () => { throw new Error('boom'); } };
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(await start(db, bad as never, 'foo@example.com')).toHaveProperty('challengeId');
+      await new Promise((r) => setTimeout(r, 10));
+      expect(spy).toHaveBeenCalled();
+      spy.mockRestore();
+    });
+  });
+});
+
 describe('http', () => {
   it('start -> verify sets sid and did cookies; per-IP limit uses socket', async () => {
     await withTestDb(async (db) => {

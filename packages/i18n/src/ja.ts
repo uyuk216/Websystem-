@@ -7,7 +7,7 @@ export const ja = {
   'login.mailBody': '確認コード: {code}\n\n同じ端末で次のリンクを開いてもログインできます（10分間有効）。\n{link}\n\n心当たりがない場合は、このメールを無視してください。',
   'login.existsSubject': 'すでにアカウントがあります',
   'login.existsBody': 'このメールアドレスのアカウントはすでに登録されています。登録ではなくログインしてください。\n{origin}\n\n心当たりがない場合は、このメールを無視してください。',
-'recovery.adminSubject': '[管理] 復旧申請があります',
+  'recovery.adminSubject': '[管理] 復旧申請があります',
   'recovery.adminBody': '復旧申請が届きました。申請 ID: {requestId}\n確認後、pnpm --filter api admin:approve-recovery {requestId} を実行してください。',
   'recovery.approvedSubject': '復旧申請が承認されました',
   'recovery.approvedBody': '復旧申請が承認されました。以前のログイン状態とパスキーはすべて無効になりました。メールアドレスでログインし、パスキーを設定し直してください。新しい復旧コードは管理者から別の方法でお渡しします。',
