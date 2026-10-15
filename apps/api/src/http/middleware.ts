@@ -32,16 +32,35 @@ export function requireSession(db: Db): MiddlewareHandler {
   };
 }
 
+const MAX_BUCKETS = 10_000;
+
 /** In-memory fixed-window limiter (phase 1). `key` derives the bucket from the request. */
-export function rateLimit(key: (c: Context) => string, max: number, windowSec: number): MiddlewareHandler {
+export function rateLimit(key: (c: Context) => string, max: number, windowSec: number, maxBuckets = MAX_BUCKETS): MiddlewareHandler {
   const hits = new Map<string, { count: number; resetAt: number }>();
+  let nextSweep = 0;
+  const sweep = (now: number): void => {
+    for (const [k, v] of hits) if (v.resetAt <= now) hits.delete(k);
+    nextSweep = now + windowSec * 1000;
+  };
   return async (c, next) => {
     const now = Date.now();
-    for (const [k, v] of hits) if (v.resetAt <= now) hits.delete(k);
+    if (now >= nextSweep) sweep(now);
     const k = key(c);
-    const e = hits.get(k) ?? { count: 0, resetAt: now + windowSec * 1000 };
+    let e = hits.get(k);
+    if (e && e.resetAt <= now) {
+      hits.delete(k);
+      e = undefined;
+    }
+    if (!e) {
+      if (hits.size >= maxBuckets) sweep(now);
+      if (hits.size >= maxBuckets) {
+        c.header('Retry-After', String(windowSec));
+        return c.json({ error: 'rate_limited' }, 429);
+      }
+      e = { count: 0, resetAt: now + windowSec * 1000 };
+      hits.set(k, e);
+    }
     e.count++;
-    hits.set(k, e);
     if (e.count > max) {
       c.header('Retry-After', String(Math.ceil((e.resetAt - now) / 1000)));
       return c.json({ error: 'rate_limited' }, 429);

@@ -4,6 +4,7 @@ export interface Config {
   emailHashKey: Buffer;
   appOrigin: string;
   smtpUrl: string;
+  mailFrom: string;
   adminEmail: string;
   rpId: string;
   port: number;
@@ -35,6 +36,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     emailHashKey: key32(env, 'EMAIL_HASH_KEY'),
     appOrigin: required(env, 'APP_ORIGIN'),
     smtpUrl: required(env, 'SMTP_URL'),
+    mailFrom: env.MAIL_FROM || 'no-reply@localhost',
     adminEmail: required(env, 'ADMIN_EMAIL'),
     rpId: required(env, 'RP_ID'),
     port: parsePort(env.PORT),

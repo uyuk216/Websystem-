@@ -4,7 +4,7 @@ export interface Mailer {
   sendMail(to: string, subject: string, text: string): Promise<void>;
 }
 
-export function createMailer(smtpUrl: string, from = 'no-reply@localhost'): Mailer {
+export function createMailer(smtpUrl: string, from: string): Mailer {
   const transport = createTransport(smtpUrl);
   return {
     async sendMail(to, subject, text) {
