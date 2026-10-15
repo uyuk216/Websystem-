@@ -24,7 +24,9 @@ export default function AppPage() {
   const [deps, setDeps] = useState<Dep[] | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [savedDir, setSavedDir] = useState(false);
+  const [savedGithub, setSavedGithub] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [publishDir, setPublishDir] = useState('');
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
@@ -58,14 +60,23 @@ export default function AppPage() {
     if (!f) return;
     const body = new FormData();
     body.append('file', f);
-    const res = await fetch(`/api/apps/${id}/deployments`, { method: 'POST', body });
-    if (!res.ok) {
-      const d = (await res.json().catch(() => ({}))) as { error?: string };
-      setError(t(errorKey(d.error ?? 'error')));
-      return;
+    setUploading(true);
+    try {
+      const res = await fetch(`/api/apps/${id}/deployments`, { method: 'POST', body });
+      if (res.status === 401) { window.location.href = `/${locale}/login`; return; }
+      if (!res.ok) {
+        // A 413 may come from a proxy without our JSON body, so the status decides.
+        const d = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(t(res.status === 413 ? 'deploy.upload.tooLarge' : errorKey(d.error ?? 'error')));
+        return;
+      }
+      if (file.current) file.current.value = '';
+      await loadDeps();
+    } catch {
+      setError(t('common.error'));
+    } finally {
+      setUploading(false);
     }
-    if (file.current) file.current.value = '';
-    await loadDeps();
   }
 
   async function rollback(did: string) {
@@ -75,14 +86,20 @@ export default function AppPage() {
 
   async function savePublishDir(e: React.FormEvent) {
     e.preventDefault();
-    setError(null); setSaved(false);
-    try { await api(`/apps/${id}`, { method: 'PATCH', body: { publishDir } }); setSaved(true); } catch (err) { fail(err); }
+    setError(null); setSavedDir(false);
+    try { await api(`/apps/${id}`, { method: 'PATCH', body: { publishDir } }); setSavedDir(true); } catch (err) { fail(err); }
   }
 
   async function saveGithub(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
-    try { await api(`/apps/${id}/github`, { method: 'PATCH', body: { repo, branch, installationId: Number(installationId) } }); setSaved(true); } catch (err) { fail(err); }
+    setError(null); setSavedGithub(false);
+    if (!/^\d{1,15}$/.test(installationId)) { setError(t('github.installationInvalid')); return; }
+    try {
+      await api(`/apps/${id}/github`, { method: 'PATCH', body: { repo, branch, installationId: Number(installationId) } });
+      setSavedGithub(true);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) setError(t('github.connectFirst')); else fail(err);
+    }
   }
 
   async function remove() {
@@ -103,7 +120,7 @@ export default function AppPage() {
       <form onSubmit={(e) => void upload(e)}>
         <label htmlFor="zf">{t('deploy.file')}</label>
         <input id="zf" ref={file} type="file" accept=".zip,application/zip" required />
-        <button type="submit">{t('deploy.upload')}</button>
+        <button type="submit" disabled={uploading}>{t('deploy.upload')}</button>
       </form>
 
       <h2>{t('deploy.title')}</h2>
@@ -141,7 +158,7 @@ export default function AppPage() {
         <label htmlFor="pd">{t('apps.publishDir')}</label>
         <input id="pd" value={publishDir} maxLength={200} onChange={(e) => setPublishDir(e.target.value)} />
         <button type="submit">{t('apps.save')}</button>
-        {saved && <span role="status">{t('apps.saved')}</span>}
+        {savedDir && <span role="status">{t('apps.saved')}</span>}
       </form>
 
       <h2>{t('github.title')}</h2>
@@ -151,8 +168,9 @@ export default function AppPage() {
         <label htmlFor="gb">{t('github.branch')}</label>
         <input id="gb" value={branch} onChange={(e) => setBranch(e.target.value)} required />
         <label htmlFor="gi">{t('github.installation')}</label>
-        <input id="gi" inputMode="numeric" value={installationId} onChange={(e) => setInstallationId(e.target.value)} required />
+        <input id="gi" inputMode="numeric" pattern="[0-9]*" value={installationId} onChange={(e) => setInstallationId(e.target.value.replace(/\D/g, ''))} required />
         <button type="submit">{t('github.save')}</button>
+        {savedGithub && <span role="status">{t('apps.saved')}</span>}
       </form>
 
       <button type="button" className="secondary" onClick={() => void remove()}>{t('apps.delete')}</button>

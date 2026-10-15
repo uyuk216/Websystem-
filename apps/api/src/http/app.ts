@@ -48,6 +48,8 @@ export interface AppDeps {
   /** Object storage and job queue; deployment routes and storage cleanup are enabled when both are given. */
   storage?: Storage;
   queue?: JobQueue;
+  /** Overrides the 200MB archive size limit (dev/e2e only; set through UPLOAD_MAX_BYTES). */
+  uploadMaxBytes?: number;
   /** GitHub App integration; the webhook and PATCH /apps/:id/github are registered only when this is given. */
   github?: {
     webhookSecret: string;
@@ -297,7 +299,7 @@ export function createApp(deps?: AppDeps): Hono {
       const depStatus = { not_found: 404, forbidden: 403, too_large: 413, invalid: 400, invalid_state: 409 } as const;
       // Multipart overhead on top of the archive limit; the exact archive size is enforced while streaming.
       const uploadLimit = bodyLimit({
-        maxSize: STATIC_LIMITS.storageBytes + 1024 * 1024,
+        maxSize: (deps.uploadMaxBytes ?? STATIC_LIMITS.storageBytes) + 1024 * 1024,
         onError: (c) => c.json({ error: 'too_large' }, 413),
       });
       app.post('/apps/:id/deployments', session, uploadLimit, async (c) => {
@@ -317,7 +319,7 @@ export function createApp(deps?: AppDeps): Hono {
         });
         if (!upload) return c.json({ error: 'invalid' }, 400);
         if (!/\.zip$/i.test(upload.filename)) { upload.file.destroy(); return c.json({ error: 'invalid_type' }, 400); }
-        const r = await createDeployment(deps.db, storage, queue, c.get('accountId'), c.req.param('id'), { source: 'upload', archive: upload.file, format: 'zip' });
+        const r = await createDeployment(deps.db, storage, queue, c.get('accountId'), c.req.param('id'), { source: 'upload', archive: upload.file, format: 'zip', maxBytes: deps.uploadMaxBytes });
         if ('error' in r) { upload.file.destroy(); return c.json({ error: r.error }, depStatus[r.error]); }
         return c.json(r, 201);
       });

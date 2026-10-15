@@ -13,7 +13,7 @@ const mailer = createMailer(config.smtpUrl, config.mailFrom);
 const storage = createStorage(loadStorageConfig(process.env));
 await storage.ensureBuckets();
 const queue = await startQueue(createQueue(config.databaseUrl));
-const app = createApp({ db, mailer, config, trustedProxyHops: config.trustedProxyHops, storage, queue,
+const app = createApp({ db, mailer, config, trustedProxyHops: config.trustedProxyHops, storage, queue, uploadMaxBytes: config.uploadMaxBytes,
   github: config.github && { webhookSecret: config.github.webhookSecret, client: createGithubClient(config.github) },
 });
 serve({ fetch: app.fetch, port: config.port }, (info) => {

@@ -21,8 +21,8 @@ export function errorKey(code: string): MessageKey {
     case 'reserved': return 'apps.reserved';
     case 'taken': return 'apps.taken';
     case 'limit': return 'apps.limit';
-    case 'invalid_type': return 'deploy.invalidType';
-    case 'too_large': return 'deploy.tooLarge';
+    case 'invalid_type': return 'deploy.upload.invalidType';
+    case 'too_large': return 'deploy.upload.tooLarge';
     case 'not_found': return 'apps.notFound';
     case 'invalid': return 'common.invalid';
     default: return 'common.error';

@@ -32,14 +32,14 @@ function capBytes(maxBytes: number): Transform {
 
 async function storeAndQueue(
   db: Db, storage: Storage, queue: JobQueue, appId: string,
-  input: { source: DeploySource; archive: Readable; format: ArchiveFormat; commitSha?: string },
+  input: { source: DeploySource; archive: Readable; format: ArchiveFormat; commitSha?: string; maxBytes?: number },
   createdBy: string | null,
   run: <T>(fn: (tx: Tx) => Promise<T>) => Promise<T>,
   allowed: (tx: Tx, ownerId: string) => Promise<boolean>,
 ): Promise<{ deploymentId: string } | { error: CreateDeploymentError }> {
   const deploymentId = randomUUID();
   const sourceKey = `${appPrefix(BUCKETS.sources, appId)}${deploymentId}.${input.format}`;
-  const capped = capBytes(STATIC_LIMITS.storageBytes);
+  const capped = capBytes(input.maxBytes ?? STATIC_LIMITS.storageBytes);
   input.archive.on('error', (e) => capped.destroy(e));
   input.archive.pipe(capped);
   try {
@@ -76,7 +76,7 @@ async function storeAndQueue(
  */
 export async function createDeployment(
   db: Db, storage: Storage, queue: JobQueue, accountId: string, appId: string,
-  input: { source: DeploySource; archive: Readable; format: ArchiveFormat; commitSha?: string },
+  input: { source: DeploySource; archive: Readable; format: ArchiveFormat; commitSha?: string; maxBytes?: number },
 ): Promise<{ deploymentId: string } | { error: CreateDeploymentError }> {
   if (!UUID.test(appId)) return { error: 'not_found' };
   const access = await withAccount(db, accountId, async (tx) => {

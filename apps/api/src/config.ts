@@ -9,6 +9,8 @@ export interface Config {
   rpId: string;
   port: number;
   trustedProxyHops: number;
+  /** Dev/e2e only: lower archive size limit in bytes (UPLOAD_MAX_BYTES). Unset = the plan limit. */
+  uploadMaxBytes?: number;
   /** GitHub App settings; present only when all three GITHUB_* variables are set. */
   github?: { appId: string; privateKey: string; webhookSecret: string; clientId: string; clientSecret: string };
 }
@@ -57,6 +59,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     rpId: required(env, 'RP_ID'),
     port: parsePort(env.PORT),
     trustedProxyHops: parseHops(env.TRUSTED_PROXY_HOPS),
+    uploadMaxBytes: env.UPLOAD_MAX_BYTES && /^\d+$/.test(env.UPLOAD_MAX_BYTES) ? Number(env.UPLOAD_MAX_BYTES) : undefined,
     github: loadGithub(env),
   };
 }

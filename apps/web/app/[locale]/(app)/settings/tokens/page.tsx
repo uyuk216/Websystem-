@@ -11,7 +11,7 @@ export default function TokensPage() {
   const [name, setName] = useState('');
   const [created, setCreated] = useState<string | null>(null);
   const [error, setError] = useState(false);
-  const load = useCallback(() => api<Tok[]>('/me/tokens').then(setRows).catch(() => setError(true)), []);
+  const load = useCallback(() => api<{ tokens: Tok[] }>('/me/tokens').then((r) => setRows(r.tokens)).catch(() => setError(true)), []);
   useEffect(() => { void load(); }, [load]);
 
   async function create(e: React.FormEvent) {
@@ -38,7 +38,7 @@ export default function TokensPage() {
         <div role="status">
           <p>{t('tokens.shownOnce')}</p>
           <code data-testid="new-token">{created}</code>
-          <button type="button" className="secondary" onClick={() => setCreated(null)}>{t('common.next')}</button>
+          <button type="button" className="secondary" onClick={() => setCreated(null)}>{t('common.close')}</button>
         </div>
       )}
       <form onSubmit={(e) => void create(e)}>
