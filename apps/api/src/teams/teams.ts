@@ -1,8 +1,7 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { and, count, eq, gt, isNull } from 'drizzle-orm';
 import { t } from 'i18n';
 import { TEAM_MAX_MEMBERS, can, type TeamRole } from 'shared';
-import { randomUUID } from 'node:crypto';
 import { withAccount, withSystem, type Db, type Tx } from '../db/client.js';
 import { accounts, owners, teamInvites, teamMembers, teams } from '../db/schema.js';
 import { hashEmail, normalizeEmail } from '../crypto/email.js';

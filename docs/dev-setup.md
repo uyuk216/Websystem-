@@ -58,3 +58,7 @@ API の IP 単位のレート制限が使うクライアント IP の決め方�
 - `N`（1 以上）：`X-Forwarded-For` の右から N 番目の値を使います（信頼できるプロキシが N 段ある場合）。
 
 本番で Cloudflare / Traefik などのプロキシの背後に置く場合は必ず段数を設定してください。0 のままだと全クライアントがプロキシの IP を共有し、IP 単位の制限が事実上全体で 1 つの制限になります。
+
+## Row Level Security and database roles
+
+Migration 0006 enables and FORCEs RLS on sessions, passkeys, login_events, teams, team_members and team_invites. The API runs authenticated queries as the NOLOGIN role `platform_api` (via `SET LOCAL ROLE`). Pre-auth flows and admin scripts (`withSystem`) run as the connecting owner role, so in production that role must be a SUPERUSER or have BYPASSRLS, and be allowed to `SET ROLE platform_api` (the migration grants this). The API checks this at startup and refuses to start otherwise.

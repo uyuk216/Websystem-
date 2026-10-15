@@ -34,3 +34,13 @@ export async function withAccount<T>(db: Db | Tx, accountId: string, fn: (tx: Tx
 export async function withSystem<T>(db: Db | Tx, fn: (tx: Tx) => Promise<T>): Promise<T> {
   return (db as Db).transaction(fn);
 }
+
+/** Refuses to run unless the connecting (owner) role bypasses RLS, which withSystem relies on. */
+export async function assertOwnerBypassesRls(db: Db): Promise<void> {
+  const rows = await db.execute<{ rolsuper: boolean; rolbypassrls: boolean; rolname: string }>(
+    sql`select rolname, rolsuper, rolbypassrls from pg_roles where rolname = current_user`);
+  const r = rows[0];
+  if (!r || !(r.rolsuper || r.rolbypassrls)) {
+    throw new Error(`Database role "${r?.rolname ?? 'unknown'}" must be SUPERUSER or BYPASSRLS: withSystem (pre-auth flows) relies on it to bypass FORCE ROW LEVEL SECURITY.`);
+  }
+}

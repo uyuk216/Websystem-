@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { withTestDb, type TestDb } from './helpers/db.js';
-import { withAccount, withSystem } from '../src/db/client.js';
+import { assertOwnerBypassesRls, withAccount, withSystem } from '../src/db/client.js';
 import { accounts, loginEvents, passkeys, sessions, teamInvites, teamMembers, teams } from '../src/db/schema.js';
 
 const acct = (h: string) => ({ emailHash: h, emailEnc: 'e', displayName: h, locale: 'ja', adultFrom: '2030-01' });
@@ -86,5 +86,16 @@ describe('row level security', () => {
       const o = await db.execute<{ tableowner: string }>(sql`select tableowner from pg_tables where tablename = 'sessions'`);
       expect(o[0]!.tableowner).not.toBe('platform_api');
       expect(await withSystem(db, (tx) => tx.select().from(sessions))).toHaveLength(2);
+    }));
+});
+
+describe('owner role check', () => {
+  it('accepts a bypassing owner and rejects a plain role', () =>
+    withTestDb(async (db) => {
+      await expect(assertOwnerBypassesRls(db)).resolves.toBeUndefined();
+      await expect(db.transaction(async (tx) => {
+        await tx.execute(sql`set local role platform_api`);
+        await assertOwnerBypassesRls(tx as never);
+      })).rejects.toThrow(/SUPERUSER or BYPASSRLS/);
     }));
 });
