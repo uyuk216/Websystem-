@@ -35,10 +35,11 @@ export function requireSession(db: Db): MiddlewareHandler {
 const MAX_BUCKETS = 10_000;
 
 /** In-memory fixed-window limiter (phase 1). `key` derives the bucket from the request. */
-export function rateLimit(key: (c: Context) => string, max: number, windowSec: number, maxBuckets = MAX_BUCKETS): MiddlewareHandler {
+export function rateLimit(key: (c: Context) => string, max: number, windowSec: number, maxBuckets = MAX_BUCKETS, onSweep?: () => void): MiddlewareHandler {
   const hits = new Map<string, { count: number; resetAt: number }>();
   let nextSweep = 0;
   const sweep = (now: number): void => {
+    onSweep?.();
     for (const [k, v] of hits) if (v.resetAt <= now) hits.delete(k);
     nextSweep = now + windowSec * 1000;
   };
@@ -52,7 +53,7 @@ export function rateLimit(key: (c: Context) => string, max: number, windowSec: n
       e = undefined;
     }
     if (!e) {
-      if (hits.size >= maxBuckets) sweep(now);
+      if (hits.size >= maxBuckets && now >= nextSweep) sweep(now);
       if (hits.size >= maxBuckets) {
         c.header('Retry-After', String(windowSec));
         return c.json({ error: 'rate_limited' }, 429);

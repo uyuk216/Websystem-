@@ -55,13 +55,17 @@ describe('rateLimit', () => {
 
   it('rejects new keys when the bucket cap is full, and recovers after the window', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
+    let sweeps = 0;
     const app = new Hono();
-    app.use('*', rateLimit((c) => c.req.header('x-k') ?? '', 5, 60, 2));
+    app.use('*', rateLimit((c) => c.req.header('x-k') ?? '', 5, 60, 2, () => sweeps++));
     app.get('/', (c) => c.text('ok'));
     const hit = (k: string) => app.request('/', { headers: { 'x-k': k } });
     expect((await hit('a')).status).toBe(200);
     expect((await hit('b')).status).toBe(200);
+    const before = sweeps;
     expect((await hit('c')).status).toBe(429);
+    expect((await hit('d')).status).toBe(429);
+    expect(sweeps).toBe(before); // full map, nextSweep in future: no scan
     expect((await hit('a')).status).toBe(200); // existing keys still served
     vi.setSystemTime(Date.now() + 61_000);
     expect((await hit('c')).status).toBe(200); // expired entries evicted
