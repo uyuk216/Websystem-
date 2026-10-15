@@ -5,9 +5,9 @@ import {
   HeadBucketCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
-  PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 import { Readable } from 'node:stream';
 
 export const BUCKETS = { sources: 'sources', sites: 'sites' } as const;
@@ -32,6 +32,15 @@ export function loadStorageConfig(env: NodeJS.ProcessEnv): StorageConfig {
     secretKey: req('S3_SECRET_KEY'),
     region: env.S3_REGION || 'us-east-1',
   };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Key prefix holding all of an app's objects in a bucket. Always ends with "/". */
+export function appPrefix(bucket: BucketName, appId: string): string {
+  if (!Object.values(BUCKETS).includes(bucket)) throw new Error(`unknown bucket: ${bucket}`);
+  if (!UUID_RE.test(appId)) throw new Error('appId must be a UUID');
+  return `${appId}/`;
 }
 
 export interface ObjectHead {
@@ -65,20 +74,15 @@ export interface Storage {
 
 function isNotFound(e: unknown): boolean {
   const x = e as { name?: string; $metadata?: { httpStatusCode?: number } };
-  return x?.name === 'NoSuchKey' || x?.name === 'NotFound' || x?.$metadata?.httpStatusCode === 404;
+  // Object-level misses only. NoSuchBucket (also a 404) must surface as an error.
+  return x?.name === 'NoSuchKey' || x?.name === 'NotFound';
 }
 
 function bucketStorage(s3: S3Client, Bucket: string): BucketStorage {
   return {
     async put(Key, body, contentType) {
-      // Streams of unknown length are not supported by PutObject; buffer them.
-      let Body: Buffer | Uint8Array | string;
-      if (body instanceof Readable) {
-        const chunks: Buffer[] = [];
-        for await (const c of body) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
-        Body = Buffer.concat(chunks);
-      } else Body = body;
-      await s3.send(new PutObjectCommand({ Bucket, Key, Body, ContentType: contentType }));
+      // Multipart, streaming upload (handles Buffers, strings and streams of unknown length).
+      await new Upload({ client: s3, params: { Bucket, Key, Body: body, ContentType: contentType } }).done();
     },
     async get(Key) {
       try {
@@ -109,7 +113,7 @@ function bucketStorage(s3: S3Client, Bucket: string): BucketStorage {
       return out;
     },
     async deletePrefix(prefix) {
-      if (!prefix) throw new Error('deletePrefix requires a non-empty prefix');
+      if (!prefix.endsWith('/')) throw new Error('deletePrefix requires a prefix ending with "/"');
       let n = 0;
       for (;;) {
         const r = await s3.send(new ListObjectsV2Command({ Bucket, Prefix: prefix, MaxKeys: 1000 }));

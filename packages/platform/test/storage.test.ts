@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { text } from 'node:stream/consumers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createStorage, loadStorageConfig, type Storage } from '../src/index.js';
+import { appPrefix, createStorage, loadStorageConfig, type Storage } from '../src/index.js';
 
 const cfg = loadStorageConfig({
   S3_ENDPOINT: process.env.S3_ENDPOINT ?? 'http://localhost:9000',
@@ -42,7 +42,30 @@ describe('storage', () => {
     await storage.sources.put(k, 'x');
     expect(await storage.sites.head(k)).toBeNull();
     await expect(storage.sources.deletePrefix('')).rejects.toThrow();
-    await storage.sources.deletePrefix(k);
+    await storage.sources.deletePrefix(`${k}`.replace(/x$/, ''));
+  });
+
+  it('deletePrefix requires a trailing slash and does not touch sibling ids', async () => {
+    const a = randomUUID();
+    const b = a.slice(0, 35) + (a.endsWith('0') ? '1' : '0');
+    await storage.sites.put(`${a}/i.html`, 'a');
+    await storage.sites.put(`${b}/i.html`, 'b');
+    await expect(storage.sites.deletePrefix(a)).rejects.toThrow();
+    await expect(storage.sites.deletePrefix(a.slice(0, 20))).rejects.toThrow();
+    expect(await storage.sites.deletePrefix(appPrefix('sites', a))).toBe(1);
+    expect(await storage.sites.head(`${b}/i.html`)).not.toBeNull();
+    await storage.sites.deletePrefix(appPrefix('sites', b));
+    expect(() => appPrefix('sites', 'ab')).toThrow();
+    expect(() => appPrefix('sites', '../x')).toThrow();
+  });
+
+  it('puts large streams (multipart)', async () => {
+    const { Readable } = await import('node:stream');
+    const k = `t-${randomUUID()}/big`;
+    const chunk = Buffer.alloc(1024 * 1024, 7);
+    await storage.sources.put(k, Readable.from(Array.from({ length: 12 }, () => chunk)));
+    expect((await storage.sources.head(k))?.size).toBe(12 * 1024 * 1024);
+    await storage.sources.deletePrefix(k.replace(/big$/, ''));
   });
 
   it('puts streams', async () => {
@@ -50,6 +73,6 @@ describe('storage', () => {
     const k = `t-${randomUUID()}/s`;
     await storage.sources.put(k, Readable.from([Buffer.from('ab'), Buffer.from('cd')]));
     expect(await text((await storage.sources.get(k))!.body)).toBe('abcd');
-    await storage.sources.deletePrefix(k);
+    await storage.sources.deletePrefix(k.replace(/s$/, ''));
   });
 });
