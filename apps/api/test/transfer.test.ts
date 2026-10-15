@@ -125,6 +125,17 @@ describe('transfer meter', () => {
     expect(mailer.lastBodyTo('teamowner@example.com')).toContain('monthly transfer limit');
   }));
 
+  it('stop() flushes and waits for the in-flight notification mail', () => withTestDb(async (db) => {
+    const a = await acct(db, 'owner@example.com');
+    const id = await site(db, a);
+    const mailer = createFakeMailer();
+    const slow = { sendMail: async (...x: Parameters<typeof mailer.sendMail>) => { await new Promise((r) => setTimeout(r, 100)); await mailer.sendMail(...x); } };
+    const meter = createTransferMeter({ db, mailer: slow, emailKey: KEY, limitBytes: 1000 });
+    meter.record(id, 900);
+    await meter.stop();
+    expect(mailer.sentTo('owner@example.com')).toBe(1);
+  }));
+
   it('drops counters of a deleted app without failing the flush', () => withTestDb(async (db) => {
     const a = await acct(db, 'o@example.com');
     const id = await site(db, a);
@@ -136,6 +147,15 @@ describe('transfer meter', () => {
 });
 
 describe('usage read model', () => {
+  it('RLS: another account selecting transfer_usage directly sees no rows', () => withTestDb(async (db) => {
+    const a = await acct(db, 'a@example.com');
+    const b = await acct(db, 'b@example.com');
+    const id = await site(db, a);
+    await db.insert(transferUsage).values({ appId: id, month: '2026-10', bytes: 1 });
+    expect(await withAccount(db, b.id, (tx) => tx.select().from(transferUsage))).toHaveLength(0);
+    expect(await withAccount(db, a.id, (tx) => tx.select().from(transferUsage))).toHaveLength(1);
+  }));
+
   it('shows the current month and the limit to the owner only (RLS), read-only for platform_api', () => withTestDb(async (db) => {
     const a = await acct(db, 'a@example.com');
     const b = await acct(db, 'b@example.com');

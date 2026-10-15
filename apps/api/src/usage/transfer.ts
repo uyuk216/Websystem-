@@ -58,6 +58,7 @@ export function createTransferMeter(opts: TransferMeterOptions): TransferMeter {
   const cache = new Map<string, { month: string; blocked: boolean; at: number }>();
   let timer: NodeJS.Timeout | undefined;
   let flushing: Promise<void> = Promise.resolve();
+  const mails = new Set<Promise<void>>();
 
   function record(appId: string, bytes: number): void {
     if (!(bytes > 0)) return;
@@ -110,7 +111,7 @@ export function createTransferMeter(opts: TransferMeterOptions): TransferMeter {
     const { mailer, emailKey } = opts;
     if (!mailer || !emailKey) return;
     // Fire-and-forget; Promise.resolve().then also catches synchronous throws.
-    void Promise.resolve().then(async () => {
+    const p: Promise<void> = Promise.resolve().then(async () => {
       const target = await withSystem(db, async (tx) => {
         const [a] = await tx.select({ name: apps.name, kind: owners.kind, accountId: owners.accountId, teamId: owners.teamId })
           .from(apps).innerJoin(owners, eq(owners.id, apps.ownerId)).where(eq(apps.id, appId));
@@ -130,6 +131,8 @@ export function createTransferMeter(opts: TransferMeterOptions): TransferMeter {
       const params = { app: target.app, limit: formatBytes(limit), used: formatBytes(used) };
       await mailer.sendMail(decryptEmail(target.emailEnc, emailKey), t(locale, 'transfer.warnSubject', params), t(locale, 'transfer.warnBody', params));
     }).catch((err: unknown) => console.error('transfer 80% mail failed', appId, err));
+    mails.add(p);
+    void p.finally(() => mails.delete(p));
   }
 
   async function isBlocked(appId: string): Promise<boolean> {
@@ -158,6 +161,10 @@ export function createTransferMeter(opts: TransferMeterOptions): TransferMeter {
       if (timer) clearInterval(timer);
       timer = undefined;
       await flush();
+      // Let in-flight 80% notifications finish, but never hold shutdown for long.
+      let t: NodeJS.Timeout | undefined;
+      await Promise.race([Promise.allSettled([...mails]), new Promise((r) => { t = setTimeout(r, 5000); })]);
+      clearTimeout(t);
     },
   };
 }
