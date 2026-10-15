@@ -1,0 +1,35 @@
+export interface Config {
+  databaseUrl: string;
+  emailEncKey: Buffer;
+  emailHashKey: Buffer;
+  appOrigin: string;
+  smtpUrl: string;
+  adminEmail: string;
+  rpId: string;
+  port: number;
+}
+
+function required(env: NodeJS.ProcessEnv, name: string): string {
+  const v = env[name];
+  if (!v) throw new Error(`Missing required env var: ${name}`);
+  return v;
+}
+
+function key32(env: NodeJS.ProcessEnv, name: string): Buffer {
+  const buf = Buffer.from(required(env, name), 'base64');
+  if (buf.length !== 32) throw new Error(`${name} must be 32 bytes (base64)`);
+  return buf;
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv): Config {
+  return {
+    databaseUrl: required(env, 'DATABASE_URL'),
+    emailEncKey: key32(env, 'EMAIL_ENC_KEY'),
+    emailHashKey: key32(env, 'EMAIL_HASH_KEY'),
+    appOrigin: required(env, 'APP_ORIGIN'),
+    smtpUrl: required(env, 'SMTP_URL'),
+    adminEmail: required(env, 'ADMIN_EMAIL'),
+    rpId: required(env, 'RP_ID'),
+    port: Number(env.PORT ?? 3001),
+  };
+}
