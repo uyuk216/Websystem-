@@ -23,3 +23,5 @@ Task 5: merged (1d8aaec, migration renumbered 0021) — complete
 STOPPED (budget): Tasks 7 (logs) and 8 (web/k8s driver/docs) not started; no Phase 3 final review yet
 Task 7: implemented WITHOUT review (budget) — commit 7018f48. Known gaps: bytes from Content-Length (chunked=0), WebSocket not logged, edge IP is socket addr behind proxy, referrer origin only. MUST be reviewed before relying on it.
 Remaining: Task 8 (web/k8s driver/docs), Phase 3 final review.
+Task 7: reviewed (no Critical); Important fixed in 6d62512 (access logs need deploy permission; flush re-queue + shutdown drain; created_at index + batched purge). Fix not re-reviewed (budget). Open minors: chunked bytes=0, WebSocket not logged, socket IP behind proxy, path segments may contain tokens.
+Remaining: Task 8, Phase 3 final review.
