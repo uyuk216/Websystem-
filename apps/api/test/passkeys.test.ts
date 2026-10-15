@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { createFakeMailer } from './helpers/fake-mailer.js';
 import { fakeAuthenticator } from './helpers/fake-authenticator.js';
 import { accounts, passkeys, webauthnChallenges, loginEvents } from '../src/db/schema.js';
 import { encryptEmail, hashEmail, normalizeEmail } from '../src/crypto/email.js';
-import { finishPasskeyLogin, finishPasskeyRegistration, startPasskeyLogin, startPasskeyRegistration } from '../src/auth/passkeys.js';
+import { purgeWebauthnChallenges, finishPasskeyLogin, finishPasskeyRegistration, startPasskeyLogin, startPasskeyRegistration } from '../src/auth/passkeys.js';
 import { createSession } from '../src/auth/sessions.js';
 import { createApp, type AppDeps } from '../src/http/app.js';
 
@@ -123,5 +123,29 @@ describe('passkey http', () => {
       const au2 = auth();
       const rf = await post('/auth/passkey/register/finish', { challengeId: rj.challengeId, response: au2.register(rj.options) }, `sid=${token}`);
       expect(rf.status).toBe(200);
+    }));
+
+  it('login still succeeds (cookie set) when login history fails', () =>
+    withTestDb(async (db) => {
+      const a = await mk(db, 'a@x.y');
+      const { au } = await register(db, a.id);
+      await db.execute(sql`drop table login_events`);
+      const app = createApp({ db, mailer: createFakeMailer(), config: cfg, trustedProxyHops: 0 } as AppDeps);
+      const post = (path: string, body: unknown) =>
+        app.request(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const { challengeId, options } = await (await post('/auth/passkey/login/start', {})).json() as { challengeId: string; options: { challenge: string } };
+      const fin = await post('/auth/passkey/login/finish', { challengeId, response: au.assert(options) });
+      expect(fin.status).toBe(200);
+      expect(fin.headers.get('set-cookie')).toContain('sid=');
+    }));
+
+  it('purges expired and consumed challenges only', () =>
+    withTestDb(async (db) => {
+      const a = await mk(db, 'a@x.y');
+      await startPasskeyRegistration(db, a.id, cfg); // live
+      const dead = await startPasskeyLogin(db, cfg);
+      await db.update(webauthnChallenges).set({ consumedAt: new Date() }).where(eq(webauthnChallenges.id, dead.challengeId));
+      expect(await purgeWebauthnChallenges(db, new Date())).toBe(1);
+      expect(await db.select().from(webauthnChallenges)).toHaveLength(1);
     }));
 });

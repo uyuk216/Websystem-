@@ -49,6 +49,8 @@ export interface RecordLoginInput {
   ip: string;
   /** Value of the `did` device cookie. */
   deviceId: string;
+  /** Send the new-device mail on a first login (default true). Signup passes false. */
+  notify?: boolean;
 }
 
 const deviceKeyOf = (deviceId: string): string => createHash('sha256').update(deviceId).digest('hex');
@@ -67,7 +69,7 @@ export async function recordLogin(db: Db, mailer: Mailer, input: RecordLoginInpu
     });
     return !prior;
   });
-  if (!isNew) return;
+  if (!isNew || input.notify === false) return;
   const [acct] = await db.select({ emailEnc: accounts.emailEnc, locale: accounts.locale }).from(accounts).where(eq(accounts.id, input.accountId));
   if (!acct) return;
   const locale: Locale = acct.locale === 'en' ? 'en' : 'ja';

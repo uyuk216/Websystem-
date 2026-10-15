@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, lt, or } from 'drizzle-orm';
 import {
   generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse,
   type AuthenticationResponseJSON, type PublicKeyCredentialCreationOptionsJSON, type PublicKeyCredentialRequestOptionsJSON,
@@ -104,4 +104,12 @@ export async function finishPasskeyLogin(
   } catch {
     return { error: 'invalid' };
   }
+}
+
+/** Deletes expired or consumed WebAuthn challenges. Returns the number of rows removed. */
+export async function purgeWebauthnChallenges(db: Db, now: Date): Promise<number> {
+  const rows = await db.delete(webauthnChallenges)
+    .where(or(lt(webauthnChallenges.expiresAt, now), isNotNull(webauthnChallenges.consumedAt)))
+    .returning({ id: webauthnChallenges.id });
+  return rows.length;
 }

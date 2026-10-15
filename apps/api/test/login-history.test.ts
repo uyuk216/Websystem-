@@ -28,6 +28,16 @@ describe('maskIp', () => {
 });
 
 describe('login history', () => {
+  it('notify:false records the event without mailing', () =>
+    withTestDb(async (db) => {
+      const mail = createFakeMailer();
+      const a = await mk(db, 'a@x.y');
+      await recordLogin(db, mail, { accountId: a.id, method: 'email', deviceLabel: 'x', ip: '203.0.113.1', deviceId: 'd', notify: false }, cfg);
+      await flush();
+      expect(mail.sentTo('a@x.y')).toBe(0);
+      expect(await listLoginEvents(db, a.id)).toHaveLength(1);
+    }));
+
   it('records masked ip, notifies only on first login from a device, purges after 30 days', () =>
     withTestDb(async (db) => {
       const mail = createFakeMailer();

@@ -73,8 +73,10 @@ export function createApp(deps?: AppDeps): Hono {
   });
   app.get('/healthz', (c) => c.json({ ok: true }));
   if (deps) {
-    const logLogin = (c: Context, accountId: string, method: 'passkey' | 'email') =>
-      recordLogin(deps.db, deps.mailer, { accountId, method, deviceLabel: deviceLabel(c), ip: clientIp(c), deviceId: c.get('deviceId') }, deps.config);
+    // History is best-effort: a failure must not fail an already-established login.
+    const logLogin = (c: Context, accountId: string, method: 'passkey' | 'email', notify = true) =>
+      recordLogin(deps.db, deps.mailer, { accountId, method, deviceLabel: deviceLabel(c), ip: clientIp(c), deviceId: c.get('deviceId'), notify }, deps.config)
+        .catch((err: unknown) => console.error('recordLogin failed', err));
     app.post('/auth/recovery/request', rateLimit(clientIp, 10, 3600), async (c) => {
       const body = await c.req.json().catch(() => null) as { email?: unknown; recoveryCode?: unknown } | null;
       if (typeof body?.email !== 'string' || typeof body.recoveryCode !== 'string' || body.email.length > 320 || body.recoveryCode.length > 200) {
@@ -102,8 +104,8 @@ export function createApp(deps?: AppDeps): Hono {
       const r = await verifyEmailCode(deps.db, b.challengeId, b.code, c.get('deviceId'));
       if ('error' in r) return c.json({ error: r.error }, r.error === 'locked' ? 429 : 400);
       const s = await createSession(deps.db, r.accountId, deviceLabel(c));
-      await logLogin(c, r.accountId, 'email');
       setSessionCookie(c, s.token);
+      await logLogin(c, r.accountId, 'email');
       return c.json({ ok: true });
     });
     // POST (not GET): opening the link changes state, and mail scanners prefetch GET links.
@@ -116,8 +118,8 @@ export function createApp(deps?: AppDeps): Hono {
       if ('error' in r) return c.json({ error: r.error }, 400);
       if (r.result === 'logged_in') {
         const s = await createSession(deps.db, r.accountId, deviceLabel(c));
-        await logLogin(c, r.accountId, 'email');
         setSessionCookie(c, s.token);
+        await logLogin(c, r.accountId, 'email');
         return c.json({ result: 'logged_in' });
       }
       return c.json({ result: 'cross_device_pending' });
@@ -146,8 +148,8 @@ export function createApp(deps?: AppDeps): Hono {
       const r = await completeCrossDeviceLogin(deps.db, b.challengeId, c.get('deviceId'));
       if ('error' in r) return c.json({ error: r.error }, 400);
       const s = await createSession(deps.db, r.accountId, deviceLabel(c));
-      await logLogin(c, r.accountId, 'email');
       setSessionCookie(c, s.token);
+      await logLogin(c, r.accountId, 'email');
       return c.json({ ok: true });
     });
     app.post('/auth/signup', attemptLimit, async (c) => {
@@ -160,8 +162,8 @@ export function createApp(deps?: AppDeps): Hono {
       }, deps.config);
       if ('error' in r) return c.json({ error: r.error }, r.error === 'exists' ? 409 : 400);
       const s = await createSession(deps.db, r.accountId, deviceLabel(c));
-      await logLogin(c, r.accountId, 'email');
       setSessionCookie(c, s.token);
+      await logLogin(c, r.accountId, 'email', false);
       return c.json({ ok: true, recoveryCode: r.recoveryCode });
     });
     const session = requireSession(deps.db);
@@ -179,8 +181,8 @@ export function createApp(deps?: AppDeps): Hono {
       const r = await finishPasskeyLogin(deps.db, { challengeId: b.challengeId, response: b.response as never }, deps.config);
       if ('error' in r) return c.json({ error: r.error }, 400);
       const s = await createSession(deps.db, r.accountId, deviceLabel(c));
-      await logLogin(c, r.accountId, 'passkey');
       setSessionCookie(c, s.token);
+      await logLogin(c, r.accountId, 'passkey');
       return c.json({ ok: true });
     });
     app.get('/me/logins', session, async (c) => c.json({ events: await listLoginEvents(deps.db, c.get('accountId')) }));
