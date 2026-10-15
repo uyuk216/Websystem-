@@ -8,6 +8,7 @@ export interface Config {
   adminEmail: string;
   rpId: string;
   port: number;
+  trustedProxyHops: number;
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -29,6 +30,12 @@ function parsePort(raw: string | undefined): number {
   return n;
 }
 
+function parseHops(raw: string | undefined): number {
+  if (raw === undefined || raw === '') return 0;
+  if (!/^\d+$/.test(raw) || Number(raw) > 10) throw new Error('TRUSTED_PROXY_HOPS must be an integer 0-10');
+  return Number(raw);
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   return {
     databaseUrl: required(env, 'DATABASE_URL'),
@@ -40,5 +47,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     adminEmail: required(env, 'ADMIN_EMAIL'),
     rpId: required(env, 'RP_ID'),
     port: parsePort(env.PORT),
+    trustedProxyHops: parseHops(env.TRUSTED_PROXY_HOPS),
   };
 }

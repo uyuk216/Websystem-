@@ -1,4 +1,5 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
+import { getConnInfo } from '@hono/node-server/conninfo';
 import type { Db } from '../db/client.js';
 import type { Mailer } from '../mail/mailer.js';
 import { requestRecovery, type RecoveryRequestConfig } from '../auth/recovery.js';
@@ -8,12 +9,30 @@ export interface AppDeps {
   db: Db;
   mailer: Mailer;
   config: RecoveryRequestConfig;
+  trustedProxyHops?: number;
 }
 
-const clientIp = (c: { req: { header(n: string): string | undefined } }): string =>
-  c.req.header('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+/** Client IP: the socket address, or with N trusted proxy hops the Nth X-Forwarded-For entry from the right. */
+export function resolveClientIp(xff: string | undefined, socketAddr: string | undefined, hops: number): string {
+  if (hops > 0 && xff) {
+    const parts = xff.split(',').map((p) => p.trim()).filter(Boolean);
+    const hit = parts[parts.length - hops];
+    if (hit) return hit;
+  }
+  return socketAddr || 'unknown';
+}
 
 export function createApp(deps?: AppDeps): Hono {
+  const hops = deps?.trustedProxyHops ?? 0;
+  const clientIp = (c: Context): string => {
+    let addr: string | undefined;
+    try {
+      addr = getConnInfo(c).remote.address;
+    } catch {
+      addr = undefined; // no socket (e.g. app.request in tests)
+    }
+    return resolveClientIp(c.req.header('x-forwarded-for'), addr, hops);
+  };
   const app = new Hono();
   app.get('/healthz', (c) => c.json({ ok: true }));
   if (deps) {

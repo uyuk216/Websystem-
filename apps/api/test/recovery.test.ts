@@ -79,3 +79,19 @@ describe('recovery requests', () => {
       expect(await requestRecovery(db, mail, { email: 'a@x.y', recoveryCode: 'bad' }, cfg)).toEqual({ error: 'rate_limited' });
     }));
 });
+
+describe('mail failures', () => {
+  it('approve still returns the code; admin mail failure still yields requestId', () =>
+    withTestDb(async (db) => {
+      const code = generateRecoveryCode();
+      await mkAccount(db, 'a@x.y', code);
+      const bad = { async sendMail() { throw new Error('smtp down'); } };
+      const r = await requestRecovery(db, bad, { email: 'a@x.y', recoveryCode: code }, cfg);
+      if ('error' in r) throw new Error('expected ok');
+      const out = await approveRecovery(db, bad, r.requestId, cfg);
+      expect(out.mailFailed).toBe(true);
+      expect(out.newRecoveryCode).toHaveLength(16);
+      const [row] = await db.select().from(accounts);
+      expect(await verifyRecoveryCode(out.newRecoveryCode, row!.recoveryCodeHash!)).toBe(true);
+    }));
+});

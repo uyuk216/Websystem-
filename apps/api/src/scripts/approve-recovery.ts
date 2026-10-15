@@ -11,8 +11,10 @@ if (!requestId) {
 const config = loadConfig(process.env);
 const { db, sql } = createDb(config.databaseUrl, { max: 1 });
 try {
-  const { newRecoveryCode } = await approveRecovery(db, createMailer(config.smtpUrl, config.mailFrom), requestId, config);
-  console.log('Recovery approved. All sessions and passkeys were revoked; the user was emailed to log in by email.');
+  const { newRecoveryCode, mailFailed } = await approveRecovery(db, createMailer(config.smtpUrl, config.mailFrom), requestId, config);
+  console.log('Recovery approved. All sessions and passkeys were revoked.');
+  if (mailFailed) console.warn('WARNING: the notification email to the user FAILED. Tell them to log in by email yourself.');
+  else console.log('The user was emailed to log in by email.');
   console.log('New recovery code (shown ONCE, not stored or emailed):');
   console.log(newRecoveryCode);
   console.log('Give it to the user out-of-band (e.g. in person) after verifying their identity.');

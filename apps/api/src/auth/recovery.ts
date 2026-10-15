@@ -63,8 +63,12 @@ export async function requestRecovery(
 
   const [req] = await db.insert(recoveryRequests).values({ accountId: account.id }).returning({ id: recoveryRequests.id });
   const requestId = req!.id;
-  await mailer.sendMail(cfg.adminEmail, t('ja', 'recovery.adminSubject') + ' / ' + t('en', 'recovery.adminSubject'),
-    t('ja', 'recovery.adminBody', { requestId }) + '\n\n' + t('en', 'recovery.adminBody', { requestId }));
+  try {
+    await mailer.sendMail(cfg.adminEmail, t('ja', 'recovery.adminSubject') + ' / ' + t('en', 'recovery.adminSubject'),
+      t('ja', 'recovery.adminBody', { requestId }) + '\n\n' + t('en', 'recovery.adminBody', { requestId }));
+  } catch (err) {
+    console.error('recovery: failed to notify admin', requestId, err);
+  }
   return { requestId };
 }
 
@@ -73,7 +77,7 @@ export async function approveRecovery(
   mailer: Mailer,
   requestId: string,
   cfg: RecoveryApproveConfig,
-): Promise<{ newRecoveryCode: string }> {
+): Promise<{ newRecoveryCode: string; mailFailed?: true }> {
   const newRecoveryCode = generateRecoveryCode();
   const newHash = await hashRecoveryCode(newRecoveryCode);
   const now = new Date();
@@ -92,6 +96,11 @@ export async function approveRecovery(
   });
 
   const loc = locale === 'en' ? 'en' : 'ja';
-  await mailer.sendMail(decryptEmail(emailEnc, cfg.emailEncKey), t(loc, 'recovery.approvedSubject'), t(loc, 'recovery.approvedBody'));
+  try {
+    await mailer.sendMail(decryptEmail(emailEnc, cfg.emailEncKey), t(loc, 'recovery.approvedSubject'), t(loc, 'recovery.approvedBody'));
+  } catch (err) {
+    console.error('recovery: failed to notify user', requestId, err);
+    return { newRecoveryCode, mailFailed: true };
+  }
   return { newRecoveryCode };
 }

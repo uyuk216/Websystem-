@@ -7,7 +7,7 @@ const LOWER = chars('abcdefghijkmnpqrstuvwxyz');
 const DIGIT = chars('23456789');
 const SYMBOL = chars('#$%&+=?@');
 const HIRAGANA = chars('あいうえかきくけさしすせたちつてなぬねのはひふほまみむめもやゆよらるれわ');
-const KATAKANA = chars('アイウエオキクケサシスセソタチツテトナヌネノハフホマミムメモヤユヨラルレワ');
+const KATAKANA = chars('アイウエオキサスセタチテトナヌネノハフホマミムメモヤユヨラルレワ');
 const KANJI = chars('山川空海森林花鳥風雪雲星月火水金土木春夏秋冬朝夜東西南北虫魚犬猫竹石光音');
 
 /** Groups a code must each contribute at least one character from (hiragana and katakana share one). */

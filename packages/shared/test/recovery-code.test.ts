@@ -9,7 +9,7 @@ describe('recovery code', () => {
     expect([...code]).toHaveLength(16);
     expect([...code].every((ch) => RECOVERY_ALPHABET.includes(ch))).toBe(true);
     for (const ch of RECOVERY_ALPHABET) expect(ch.normalize('NFKC')).toBe(ch);
-    for (const bad of ['O', '0', 'I', 'l', '1', '口', '力', 'ー', '二', '工', '夕', '卜', '八']) {
+    for (const bad of ['O', '0', 'I', 'l', '1', '口', '力', 'ー', '二', '工', '夕', '卜', '八', 'ク', 'ケ', 'シ', 'ツ', 'ソ']) {
       expect(RECOVERY_ALPHABET).not.toContain(bad);
     }
   });
