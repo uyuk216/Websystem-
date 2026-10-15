@@ -27,6 +27,18 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7
 
+  packages/i18n:
+    devDependencies:
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7
+
+  packages/shared:
+    devDependencies:
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7
+
 packages:
 
   '@esbuild/aix-ppc64@0.28.2':
