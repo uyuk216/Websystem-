@@ -71,6 +71,27 @@
       "when": 1792073142224,
       "tag": "0009_dry_lady_deathstrike",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792073416826,
+      "tag": "0010_white_scarecrow",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792073417854,
+      "tag": "0011_transfer_usage_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792073837925,
+      "tag": "0012_transfer_usage_enable_rls",
+      "breakpoints": true
     }
   ]
 }
