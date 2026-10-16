@@ -104,3 +104,28 @@ test('GitHub form submits and asks to connect GitHub first', async ({ page }) =>
   await page.getByRole('button', { name: 'Save integration' }).click();
   await expect(page.locator('p.error')).toContainText('Connect GitHub first');
 });
+
+test('dynamic app: set env var (value never shown), list, delete', async ({ page }) => {
+  await signUp(page, newEmail(), 'en');
+  const name = appName();
+  await page.goto('/en/apps');
+  await page.getByLabel('App name (subdomain)').fill(name);
+  await page.getByLabel('Type').selectOption('dynamic');
+  await page.getByRole('button', { name: 'Create app' }).click();
+  await page.getByRole('link', { name }).click();
+  await expect(page.getByTestId('dynamic-panel')).toBeVisible();
+  await expect(page.getByTestId('dyn-status')).toHaveText('Not deployed');
+
+  await page.getByLabel('Name', { exact: true }).fill('GREETING');
+  await page.getByLabel('Value').fill('hunter2-secret');
+  await page.getByRole('button', { name: 'Set', exact: true }).click();
+  const list = page.getByTestId('env-list');
+  await expect(list.locator('code', { hasText: 'GREETING' })).toBeVisible();
+  await expect(page.locator('body')).not.toContainText('hunter2-secret');
+  await page.reload();
+  await expect(page.getByTestId('env-list').locator('code', { hasText: 'GREETING' })).toBeVisible();
+  await expect(page.locator('body')).not.toContainText('hunter2-secret');
+
+  await page.getByTestId('env-list').getByRole('button', { name: /Delete/ }).click();
+  await expect(page.getByText('No environment variables.')).toBeVisible();
+});

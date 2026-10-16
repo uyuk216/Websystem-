@@ -5,7 +5,7 @@ export class ApiError extends Error {
 }
 
 interface Options {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   /** Do not bounce to the login page on 401 (login flows handle it themselves). */
   noRedirect?: boolean;

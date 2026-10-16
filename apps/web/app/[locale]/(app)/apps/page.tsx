@@ -14,6 +14,7 @@ export default function AppsPage() {
   const [owners, setOwners] = useState<Owner[]>([]);
   const [ownerId, setOwnerId] = useState('');
   const [name, setName] = useState('');
+  const [kind, setKind] = useState<'static' | 'dynamic'>('static');
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => api<{ apps: AppRow[] }>('/apps').then((r) => setApps(r.apps)).catch(() => setError(t('common.error'))), [t]);
@@ -29,7 +30,7 @@ export default function AppsPage() {
     e.preventDefault();
     setError(null);
     try {
-      await api('/apps', { method: 'POST', body: { name, ownerId } });
+      await api('/apps', { method: 'POST', body: { name, ownerId, kind } });
       setName('');
       await load();
     } catch (err) { setError(t(err instanceof ApiError ? errorKey(err.code) : 'common.error')); }
@@ -51,6 +52,11 @@ export default function AppsPage() {
         <label htmlFor="ao">{t('apps.owner')}</label>
         <select id="ao" value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
           {owners.map((o) => <option key={o.id} value={o.id}>{o.kind === 'account' ? t('apps.ownerMe') : o.name}</option>)}
+        </select>
+        <label htmlFor="ak">{t('apps.kind')}</label>
+        <select id="ak" value={kind} onChange={(e) => setKind(e.target.value as 'static' | 'dynamic')}>
+          <option value="static">{t('apps.kind.static')}</option>
+          <option value="dynamic">{t('apps.kind.dynamic')}</option>
         </select>
         <button type="submit" disabled={!ownerId}>{t('apps.create')}</button>
       </form>

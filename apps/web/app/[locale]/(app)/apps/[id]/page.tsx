@@ -5,8 +5,9 @@ import { api, ApiError } from '@/lib/api';
 import { errorKey, useI18n } from '@/lib/i18n';
 import { siteUrl } from '@/lib/site';
 import type { MessageKey } from 'i18n';
+import { DynamicPanel } from './dynamic-panel';
 
-interface AppInfo { id: string; name: string; publishDir: string; activeDeploymentId: string | null; githubRepo: string | null; githubBranch: string | null }
+interface AppInfo { id: string; name: string; kind: 'static' | 'dynamic'; publishDir: string; activeDeploymentId: string | null; githubRepo: string | null; githubBranch: string | null }
 interface Finding { path: string; line: number; rule: string }
 interface Dep {
   id: string; status: string; source: string; message: string | null; findings: Finding[] | { kind: 'runtime'; logs: string[] } | null;
@@ -120,7 +121,8 @@ export default function AppPage() {
       <h1>{app.name}</h1>
       {error && <p role="alert" className="error">{error}</p>}
       <p>{t('apps.siteUrl')}: <a href={url} data-testid="site-url" target="_blank" rel="noreferrer">{url}</a></p>
-      {usage && <p className="muted">{t('apps.usage')}: {(usage.bytes / 1048576).toFixed(1)} / {(usage.limitBytes / 1048576).toFixed(0)} MB</p>}
+      {app.kind === 'dynamic' && <DynamicPanel id={app.id} active={app.activeDeploymentId !== null} statusLabel={t(app.activeDeploymentId ? 'deploy.status.live' : 'dyn.status.none')} />}
+      {app.kind !== 'dynamic' && usage && <p className="muted">{t('apps.usage')}: {(usage.bytes / 1048576).toFixed(1)} / {(usage.limitBytes / 1048576).toFixed(0)} MB</p>}
 
       <h2>{t('deploy.upload')}</h2>
       <form onSubmit={(e) => void upload(e)}>
@@ -168,13 +170,13 @@ export default function AppPage() {
         </div>
       )}
 
-      <h2>{t('apps.publishDir')}</h2>
-      <form onSubmit={(e) => void savePublishDir(e)}>
+      {app.kind !== 'dynamic' && <h2>{t('apps.publishDir')}</h2>}
+      {app.kind !== 'dynamic' && <form onSubmit={(e) => void savePublishDir(e)}>
         <label htmlFor="pd">{t('apps.publishDir')}</label>
         <input id="pd" value={publishDir} maxLength={200} onChange={(e) => setPublishDir(e.target.value)} />
         <button type="submit">{t('apps.save')}</button>
         {savedDir && <span role="status">{t('apps.saved')}</span>}
-      </form>
+      </form>}
 
       <h2>{t('github.title')}</h2>
       <form onSubmit={(e) => void saveGithub(e)} data-testid="github-form">

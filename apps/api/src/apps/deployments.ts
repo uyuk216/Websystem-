@@ -260,7 +260,7 @@ export async function restart(
     if (!d?.imageRef) return { error: 'invalid_state' as const };
     return { ownerId: a.ownerId, deploymentId: a.active, imageRef: d.imageRef };
   });
-  if ('error' in pre) return { error: pre.error };
+  if ('error' in pre) return { error: pre.error as RollbackError };
   if (!rt) return { error: 'invalid_state' };
   if (await runtimeBlockedUntil(db, pre.ownerId)) return { error: 'runtime_limit' };
   const run = async (): Promise<{ error: RollbackError; reason?: string; logs?: string[] } | null> => {
