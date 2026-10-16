@@ -245,3 +245,43 @@ export async function rollback(
   if (rt) for (const id of switched.stop) await rt.driver.stopDeployment(appId, id).catch((e: unknown) => console.error('stop old deployment failed', appId, id, e));
   return { ok: true };
 }
+
+/** Restarts the active deployment of a dynamic app (to apply changed env vars), under the app's wake lock with a health check. */
+export async function restart(
+  db: Db, accountId: string, appId: string, rt?: DynamicRuntime,
+): Promise<{ ok: true } | { error: RollbackError; reason?: string; logs?: string[] }> {
+  if (!UUID.test(appId)) return { error: 'not_found' };
+  const pre = await withAccount(db, accountId, async (tx) => {
+    const [a] = await tx.select({ ownerId: apps.ownerId, kind: apps.kind, active: apps.activeDeploymentId }).from(apps).where(eq(apps.id, appId));
+    if (!a) return { error: 'not_found' as const };
+    if (!(await mayManage(tx, accountId, a.ownerId))) return { error: 'forbidden' as const };
+    if (a.kind !== 'dynamic' || !a.active) return { error: 'invalid_state' as const };
+    const [d] = await tx.select({ imageRef: deployments.imageRef }).from(deployments).where(eq(deployments.id, a.active));
+    if (!d?.imageRef) return { error: 'invalid_state' as const };
+    return { ownerId: a.ownerId, deploymentId: a.active, imageRef: d.imageRef };
+  });
+  if ('error' in pre) return { error: pre.error };
+  if (!rt) return { error: 'invalid_state' };
+  if (await runtimeBlockedUntil(db, pre.ownerId)) return { error: 'runtime_limit' };
+  const run = async (): Promise<{ error: RollbackError; reason?: string; logs?: string[] } | null> => {
+    try {
+      const env = await getAppEnvForRun(db, rt.envKey, appId);
+      await rt.driver.stopDeployment(appId, pre.deploymentId);
+      await rt.driver.start({
+        appId, deploymentId: pre.deploymentId, ownerId: pre.ownerId, image: pre.imageRef, env: { ...env, PORT: String(CONTAINER_PORT) },
+        limits: { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids }, port: CONTAINER_PORT,
+      });
+      const health = await waitHealthy(rt.driver, appId, pre.deploymentId, rt.health);
+      if (!health.ok) {
+        const logs = await collectLogs(rt.driver, appId, pre.deploymentId, Object.values(env));
+        return { error: 'start_failed', reason: health.reason === 'exited' ? 'deploy.error.app_exited' : 'deploy.error.health_check_failed', logs };
+      }
+      return null;
+    } catch (e) {
+      console.error('restart failed', appId, e);
+      return { error: 'start_failed' };
+    }
+  };
+  const failed = await (rt.lock ? rt.lock(appId, run) : run());
+  return failed ?? { ok: true };
+}

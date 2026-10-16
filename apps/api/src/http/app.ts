@@ -16,7 +16,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { JOBS, type Storage } from 'platform';
 import type { DynamicRuntime } from '../ingest/dynamic.js';
 import { STATIC_LIMITS } from 'shared';
-import { createDeployment, listDeployments, rollback, type JobQueue } from '../apps/deployments.js';
+import { createDeployment, listDeployments, restart, rollback, type JobQueue } from '../apps/deployments.js';
 import { createApp as createAppRecord, deleteApp, getApp, listApps, listOwners, updateApp } from '../apps/apps.js';
 import { deleteEnvVar, listEnvVars, setEnvVar, type EnvError } from '../apps/env-vars.js';
 import { createApiToken, listApiTokens, revokeApiToken } from '../apps/api-tokens.js';
@@ -274,8 +274,8 @@ export function createApp(deps?: AppDeps): Hono {
     app.get('/apps', session, async (c) => c.json({ apps: await listApps(deps.db, c.get('accountId')) }));
     app.post('/apps', session, async (c) => {
       const b = await jsonBody(c);
-      if (!str(b?.name, 100) || !str(b.ownerId, 64) || (b.publishDir !== undefined && !str(b.publishDir, 200))) return c.json({ error: 'invalid' }, 400);
-      const r = await createAppRecord(deps.db, c.get('accountId'), { name: b.name, ownerId: b.ownerId, publishDir: b.publishDir as string | undefined });
+      if (!str(b?.name, 100) || !str(b.ownerId, 64) || (b.publishDir !== undefined && !str(b.publishDir, 200)) || (b.kind !== undefined && b.kind !== 'static' && b.kind !== 'dynamic')) return c.json({ error: 'invalid' }, 400);
+      const r = await createAppRecord(deps.db, c.get('accountId'), { name: b.name, ownerId: b.ownerId, publishDir: b.publishDir as string | undefined, kind: b.kind as 'static' | 'dynamic' | undefined });
       return 'error' in r ? c.json({ error: r.error }, appStatus[r.error]) : c.json(r, 201);
     });
     app.get('/apps/:id', session, async (c) => {
@@ -341,6 +341,10 @@ export function createApp(deps?: AppDeps): Hono {
         return 'error' in r ? c.json(r, depStatus[r.error]) : c.json(r);
       });
     }
+    app.post('/apps/:id/restart', session, async (c) => {
+      const r = await restart(deps.db, c.get('accountId'), c.req.param('id'), deps.runtime);
+      return 'error' in r ? c.json(r, ({ not_found: 404, forbidden: 403, invalid_state: 409, start_failed: 502, runtime_limit: 409 } as const)[r.error]) : c.json(r);
+    });
     app.get('/apps/:id/access-logs', session, async (c) => {
       const r = await listAccessLogs(deps.db, c.get('accountId'), c.req.param('id'), Number(c.req.query('limit') ?? 100));
       return 'error' in r ? c.json(r, r.error === 'forbidden' ? 403 : 404) : c.json(r);

@@ -21,7 +21,7 @@ export function normalizePublishDir(input: string): string | null {
 }
 
 export async function createApp(
-  db: Db, accountId: string, input: { name: string; ownerId: string; publishDir?: string },
+  db: Db, accountId: string, input: { name: string; ownerId: string; publishDir?: string; kind?: 'static' | 'dynamic' },
 ): Promise<{ appId: string } | { error: CreateAppError }> {
   const v = validateAppName(input.name);
   if (!v.ok) return { error: v.reason };
@@ -40,7 +40,7 @@ export async function createApp(
     }
     const [n] = await tx.select({ n: count() }).from(apps).where(eq(apps.ownerId, o.id));
     if ((n?.n ?? 0) >= STATIC_LIMITS.sitesPerOwner) return { error: 'limit' as const };
-    const [row] = await tx.insert(apps).values({ ownerId: o.id, name: input.name, publishDir })
+    const [row] = await tx.insert(apps).values({ ownerId: o.id, name: input.name, publishDir, kind: input.kind ?? 'static' })
       .onConflictDoNothing({ target: apps.name }).returning({ id: apps.id });
     return row ? { appId: row.id } : { error: 'taken' as const };
   });
