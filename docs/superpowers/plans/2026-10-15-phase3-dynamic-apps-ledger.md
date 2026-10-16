@@ -25,3 +25,5 @@ Task 7: implemented WITHOUT review (budget) — commit 7018f48. Known gaps: byte
 Remaining: Task 8 (web/k8s driver/docs), Phase 3 final review.
 Task 7: reviewed (no Critical); Important fixed in 6d62512 (access logs need deploy permission; flush re-queue + shutdown drain; created_at index + batched purge). Fix not re-reviewed (budget). Open minors: chunked bytes=0, WebSocket not logged, socket IP behind proxy, path segments may contain tokens.
 Remaining: Task 8, Phase 3 final review.
+Task 8 (web part): implemented WITHOUT review — restart API + dynamic app UI (env vars, logs, access logs, usage, restart). Status shown is "live/not deployed" (no live container status endpoint). e2e requires APP_ENV_KEY.
+Remaining: Task 8 Kubernetes driver + CI + docs; reviews of T7 fix and T8 web; Phase 3 final review.
