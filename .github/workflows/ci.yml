@@ -49,7 +49,7 @@ jobs:
       - name: Start MinIO (object storage for sources / sites)
         run: |
           docker run -d --name minio -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+            chainguard/minio:latest server /data
           for i in $(seq 1 30); do curl -sf http://localhost:9000/minio/health/live && break; sleep 1; done
       - run: pnpm lint
       - run: pnpm typecheck

@@ -49,7 +49,7 @@ pnpm doctor              # ツールの確認だけ行う
 
 ## メモ
 
-MinIO のイメージは Docker Hub での配布が終わったため `quay.io/minio/minio` を使います。
+MinIO の公式イメージ（Docker Hub・quay.io）は匿名で取得できなくなったため `chainguard/minio:latest` を使います。
 取得できない環境では `MINIO_IMAGE=<イメージ名> pnpm dev:up` で差し替えられます。
 
 ## TRUSTED_PROXY_HOPS

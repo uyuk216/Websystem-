@@ -18,8 +18,8 @@ services:
       retries: 10
 
   minio:
-    # minio は Docker Hub での配布が終了したため quay.io を使う。入手できない環境では MINIO_IMAGE で差し替える
-    image: ${MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z}
+    # 公式の minio イメージ（Docker Hub・quay.io）は匿名で取得できなくなったため chainguard を使う。MINIO_IMAGE で差し替え可
+    image: ${MINIO_IMAGE:-chainguard/minio:latest}
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
