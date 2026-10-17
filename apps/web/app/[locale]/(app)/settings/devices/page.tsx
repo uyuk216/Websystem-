@@ -26,7 +26,7 @@ export default function DevicesPage() {
     <>
       <h1>{t('devices.title')}</h1>
       {error && <p role="alert" className="error">{t('common.error')}</p>}
-      {rows?.length === 0 && <p>{t('devices.empty')}</p>}
+      {rows?.length === 0 && <p className="blankslate">{t('devices.empty')}</p>}
       {rows && rows.length > 0 && (
         <div className="scroll">
           <table>

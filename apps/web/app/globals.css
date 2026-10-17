@@ -60,11 +60,23 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .notice { padding: 0.75rem 1rem; color: var(--fg); background: var(--danger-subtle); border: 1px solid var(--danger); border-radius: var(--radius); }
 
+/* Boxes: empty states, forms, lists */
+.blankslate { padding: 2rem 1rem; text-align: center; color: var(--muted); border: 1px dashed var(--line-strong); border-radius: var(--radius); }
+.box { margin: 1.5rem 0; padding: 1rem 1.25rem; border: 1px solid var(--line); border-radius: var(--radius); }
+.box h2 { margin: 0 0 0.25rem; font-size: 1rem; }
+.box label:first-of-type { margin-top: 0.75rem; }
+ul.rows { list-style: none; margin: 0 0 1rem; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); }
+ul.rows:empty { display: none; }
+ul.rows li { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; align-items: baseline; padding: 0.6rem 1rem; border-top: 1px solid var(--line); }
+ul.rows li:first-child { border-top: 0; }
+ul.rows li a { font-weight: 600; }
+
 /* Tables */
 .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--line); }
-th { font-weight: 600; background: var(--bg-subtle); }
+thead th { font-weight: 600; background: var(--bg-subtle); }
+tbody th { font-weight: 600; }
 tr:last-child td { border-bottom: 0; }
 
 /* Signed-in shell: the sidebar is always on screen (no hamburger menu). */

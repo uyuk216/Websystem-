@@ -125,7 +125,7 @@ export default function AppPage() {
       {app.kind !== 'dynamic' && usage && <p className="muted">{t('apps.usage')}: {(usage.bytes / 1048576).toFixed(1)} / {(usage.limitBytes / 1048576).toFixed(0)} MB</p>}
 
       <h2>{t('deploy.upload')}</h2>
-      <form onSubmit={(e) => void upload(e)}>
+      <form className="box" onSubmit={(e) => void upload(e)}>
         <label htmlFor="zf">{t('deploy.file')}</label>
         <input id="zf" ref={file} type="file" accept=".zip,application/zip" required />
         <button type="submit" disabled={uploading}>{t('deploy.upload')}</button>
@@ -138,7 +138,7 @@ export default function AppPage() {
         </div>
       )}
       <h2>{t('deploy.title')}</h2>
-      {deps?.length === 0 && <p>{t('deploy.empty')}</p>}
+      {deps?.length === 0 && <p className="blankslate">{t('deploy.empty')}</p>}
       {deps && deps.length > 0 && (
         <div className="scroll">
           <table>
@@ -171,7 +171,7 @@ export default function AppPage() {
       )}
 
       {app.kind !== 'dynamic' && <h2>{t('apps.publishDir')}</h2>}
-      {app.kind !== 'dynamic' && <form onSubmit={(e) => void savePublishDir(e)}>
+      {app.kind !== 'dynamic' && <form className="box" onSubmit={(e) => void savePublishDir(e)}>
         <label htmlFor="pd">{t('apps.publishDir')}</label>
         <input id="pd" value={publishDir} maxLength={200} onChange={(e) => setPublishDir(e.target.value)} />
         <button type="submit">{t('apps.save')}</button>
@@ -179,7 +179,7 @@ export default function AppPage() {
       </form>}
 
       <h2>{t('github.title')}</h2>
-      <form onSubmit={(e) => void saveGithub(e)} data-testid="github-form">
+      <form className="box" onSubmit={(e) => void saveGithub(e)} data-testid="github-form">
         <label htmlFor="gr">{t('github.repo')}</label>
         <input id="gr" value={repo} onChange={(e) => setRepo(e.target.value)} required />
         <label htmlFor="gb">{t('github.branch')}</label>

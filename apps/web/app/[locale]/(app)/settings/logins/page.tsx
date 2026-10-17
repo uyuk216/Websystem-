@@ -17,7 +17,7 @@ export default function LoginsPage() {
     <>
       <h1>{t('logins.title')}</h1>
       {error && <p role="alert" className="error">{t('common.error')}</p>}
-      {rows?.length === 0 && <p>{t('logins.empty')}</p>}
+      {rows?.length === 0 && <p className="blankslate">{t('logins.empty')}</p>}
       {rows && rows.length > 0 && (
         <div className="scroll">
           <table>

@@ -41,12 +41,13 @@ export default function TokensPage() {
           <button type="button" className="secondary" onClick={() => setCreated(null)}>{t('common.close')}</button>
         </div>
       )}
-      <form onSubmit={(e) => void create(e)}>
+      <form className="box" onSubmit={(e) => void create(e)}>
+        <h2>{t('tokens.create')}</h2>
         <label htmlFor="tkn">{t('tokens.name')}</label>
         <input id="tkn" maxLength={100} required value={name} onChange={(e) => setName(e.target.value)} />
         <button type="submit">{t('tokens.create')}</button>
       </form>
-      {rows?.length === 0 && <p>{t('tokens.empty')}</p>}
+      {rows?.length === 0 && <p className="blankslate">{t('tokens.empty')}</p>}
       {rows && rows.length > 0 && (
         <div className="scroll">
           <table>

@@ -29,11 +29,12 @@ export default function TeamsPage() {
     <>
       <h1>{t('teams.title')}</h1>
       {error && <p role="alert" className="error">{error}</p>}
-      {teams?.length === 0 && <p>{t('teams.empty')}</p>}
-      <ul>
+      {teams?.length === 0 && <p className="blankslate">{t('teams.empty')}</p>}
+      <ul className="rows">
         {teams?.map((x) => <li key={x.id}><Link href={`/${locale}/teams/${x.id}`}>{x.name}</Link> <span className="muted">({t(roleKey[x.role] ?? 'teams.member')})</span></li>)}
       </ul>
-      <form onSubmit={(e) => void create(e)}>
+      <form className="box" onSubmit={(e) => void create(e)}>
+        <h2>{t('teams.create')}</h2>
         <label htmlFor="tn">{t('teams.name')}</label>
         <input id="tn" name="name" maxLength={100} required value={name} onChange={(e) => setName(e.target.value)} />
         <button type="submit">{t('teams.create')}</button>

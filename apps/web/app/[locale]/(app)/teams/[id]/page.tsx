@@ -57,7 +57,7 @@ export default function TeamPage() {
         </table>
       </div>
       {canManage && (
-        <form onSubmit={(e) => { e.preventDefault(); void run(() => api(`/teams/${id}/invites`, { method: 'POST', body: { email } }), t('teams.invited'), () => setEmail('')); }}>
+        <form className="box" onSubmit={(e) => { e.preventDefault(); void run(() => api(`/teams/${id}/invites`, { method: 'POST', body: { email } }), t('teams.invited'), () => setEmail('')); }}>
           <label htmlFor="ie">{t('teams.inviteEmail')}</label>
           <input id="ie" type="email" name="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
           <button type="submit">{t('teams.invite')}</button>

@@ -40,13 +40,14 @@ export default function AppsPage() {
     <>
       <h1>{t('apps.title')}</h1>
       {error && <p role="alert" className="error">{error}</p>}
-      {apps?.length === 0 && <p>{t('apps.empty')}</p>}
-      <ul>
+      {apps?.length === 0 && <p className="blankslate">{t('apps.empty')}</p>}
+      <ul className="rows">
         {apps?.map((a) => (
           <li key={a.id}><Link href={`/${locale}/apps/${a.id}`}>{a.name}</Link> <span className="muted">{siteUrl(a.name)}</span></li>
         ))}
       </ul>
-      <form onSubmit={(e) => void create(e)}>
+      <form className="box" onSubmit={(e) => void create(e)}>
+        <h2>{t('apps.create')}</h2>
         <label htmlFor="an">{t('apps.name')}</label>
         <input id="an" name="name" maxLength={100} required value={name} onChange={(e) => setName(e.target.value)} />
         <label htmlFor="ao">{t('apps.owner')}</label>

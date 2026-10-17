@@ -78,7 +78,7 @@ export function DynamicPanel({ id, active, statusLabel }: { id: string; active: 
 
       <h2>{t('dyn.env.title')}</h2>
       <p className="muted">{t('dyn.env.help')}</p>
-      {vars?.length === 0 && <p>{t('dyn.env.empty')}</p>}
+      {vars?.length === 0 && <p className="blankslate">{t('dyn.env.empty')}</p>}
       {vars && vars.length > 0 && (
         <div className="scroll">
           <table data-testid="env-list">
@@ -95,7 +95,7 @@ export function DynamicPanel({ id, active, statusLabel }: { id: string; active: 
           </table>
         </div>
       )}
-      <form onSubmit={(e) => void setVar(e)}>
+      <form className="box" onSubmit={(e) => void setVar(e)}>
         <label htmlFor="evn">{t('dyn.env.name')}</label>
         <input id="evn" value={name} maxLength={64} autoComplete="off" required onChange={(e) => setName(e.target.value)} />
         <label htmlFor="evv">{t('dyn.env.value')}</label>
@@ -106,10 +106,10 @@ export function DynamicPanel({ id, active, statusLabel }: { id: string; active: 
 
       <h2>{t('dyn.logs.title')}</h2>
       <button type="button" className="secondary" onClick={() => void loadLogs()}>{t('dyn.logs.refresh')}</button>
-      {lines && (lines.length === 0 ? <p>{t('dyn.logs.empty')}</p> : <pre data-testid="app-log">{lines.join('\n')}</pre>)}
+      {lines && (lines.length === 0 ? <p className="blankslate">{t('dyn.logs.empty')}</p> : <pre data-testid="app-log">{lines.join('\n')}</pre>)}
 
       <h2>{t('dyn.access.title')}</h2>
-      {access?.length === 0 && <p>{t('dyn.access.empty')}</p>}
+      {access?.length === 0 && <p className="blankslate">{t('dyn.access.empty')}</p>}
       {access && access.length > 0 && (
         <div className="scroll">
           <table>
