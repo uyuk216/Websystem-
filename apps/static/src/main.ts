@@ -40,7 +40,7 @@ const dynamic = runtime && {
   proto: process.env.EDGE_PROTO === 'http' ? ('http' as const) : ('https' as const),
 };
 
-const app = createStaticApp({ db, storage: storage.sites, meter, baseDomain, dynamic, accessLog });
+const app = createStaticApp({ db, storage: storage.sites, meter, baseDomain, dynamic, accessLog, trustedProxyHops: Number(process.env.EDGE_TRUSTED_PROXY_HOPS || 0) });
 const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`static listening on :${info.port} (*.${baseDomain})`);
 });
@@ -52,8 +52,9 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     // Flush access logs only after the server has fully closed so in-flight requests are recorded.
     // Keep-alive sockets and proxied WebSockets would hold close() open forever, so give in-flight requests 10s.
     const closed = new Promise<void>((resolve) => {
+      // Idle keep-alive sockets are left to time out (5s) instead of being cut: a proxy reusing one at that moment
+      // would fail the request. Anything still open after 10s is closed.
       server.close(() => resolve());
-      if ('closeIdleConnections' in server) server.closeIdleConnections();
       setTimeout(() => {
         if ('closeAllConnections' in server) server.closeAllConnections();
         resolve();

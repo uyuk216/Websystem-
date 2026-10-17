@@ -11,7 +11,7 @@ import type { StoredObject } from 'platform';
 import type { Duplex } from 'node:stream';
 import type { Waker } from 'platform';
 import type { AccessLogger } from 'api/logs';
-import { proxyRequest, proxyUpgrade, type ProxyFailure } from './proxy.js';
+import { clientAddress, proxyRequest, proxyUpgrade, type ProxyFailure } from './proxy.js';
 import { candidates, contentTypeFor, parsePath, pickLocale, resolveSite } from './site.js';
 
 export interface SiteReader {
@@ -24,6 +24,8 @@ export interface StaticAppDeps {
   meter: Pick<TransferMeter, 'record' | 'isBlocked'>;
   baseDomain: string;
   now?: () => Date;
+  /** Proxies in front of the edge whose X-Forwarded-For is trusted (EDGE_TRUSTED_PROXY_HOPS; default 0). */
+  trustedProxyHops?: number;
   /** Access log sink (batched writes; never blocks a request). */
   accessLog?: Pick<AccessLogger, 'record'>;
   /** How long a name -> live site lookup is reused (default 3s: a rollback or new deployment can take up to this long to show per static process). */
@@ -75,6 +77,7 @@ function rawPath(c: Context): string {
 export function createStaticApp(deps: StaticAppDeps): StaticApp {
   const now = deps.now ?? (() => new Date());
   const siteCacheMs = deps.siteCacheMs ?? 3_000;
+  const hops = deps.trustedProxyHops ?? 0;
   const sites = new Map<string, { at: number; site: LiveApp | null }>();
 
   async function lookup(name: string) {
@@ -167,6 +170,7 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
       if (!woke.ok) return startFailed(c);
       // The target is always the driver's endpoint, never anything derived from the request.
       const r = await proxyRequest(incoming, { host: woke.host, port: woke.port }, {
+        clientIp: clientAddress(incoming.headers['x-forwarded-for'], incoming.socket.remoteAddress, hops),
         proto, signal: abort.signal, onBytes: (n) => { deps.meter.record(site.appId, n); touch(site.appId); },
       });
       return new Response(r.body, { status: r.status, headers: r.headers });
@@ -210,7 +214,7 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
       // A long-lived connection keeps the app awake; cleared when the socket closes.
       keepAlive = setInterval(() => touch(site.appId), 30_000);
       try {
-        await proxyUpgrade(req, socket, head, { host: woke.host, port: woke.port }, { proto, onBytes: (n) => deps.meter.record(site.appId, n) });
+        await proxyUpgrade(req, socket, head, { host: woke.host, port: woke.port }, { proto, clientIp: clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress, hops), onBytes: (n) => deps.meter.record(site.appId, n) });
       } catch (e) {
         if (e !== 'timeout') deps.dynamic.waker.invalidate(site.appId);
         reply(e === 'timeout' ? '504 Gateway Timeout' : '502 Bad Gateway');
@@ -228,7 +232,7 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
       const incoming = (c.env as { incoming?: IncomingMessage } | undefined)?.incoming;
       deps.accessLog.record({
         appId, method: c.req.method, path: rawPath(c), status: c.res.status, bytes: Number(c.res.headers.get('content-length') ?? 0) || 0,
-        userAgent: c.req.header('user-agent'), referrer: c.req.header('referer'), ip: incoming?.socket.remoteAddress ?? '',
+        userAgent: c.req.header('user-agent'), referrer: c.req.header('referer'), ip: incoming ? clientAddress(incoming.headers['x-forwarded-for'], incoming.socket.remoteAddress, hops) : '',
       });
     } catch (e) { console.error('access log failed', e); }
   });

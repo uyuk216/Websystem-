@@ -142,3 +142,18 @@ describe('applyPath', () => {
     expect(() => applyPath({ kind: 'Secret', metadata: { name: 'x' } })).toThrow(/unsupported/);
   });
 });
+
+describe('waitHealthy with the Kubernetes driver', () => {
+  it('trusts the readiness probe (Ready pod) instead of fetching the in-cluster endpoint', async () => {
+    const { waitHealthy } = await import('../../src/runtime/rollout.js');
+    const f = fakeApi();
+    const d = new KubernetesDriver({ api: f.api, warn: () => {} });
+    await d.start(spec(dep1));
+    f.setPods([pod(dep1)]);
+    expect(await waitHealthy(d, appId, dep1, { timeoutMs: 500, intervalMs: 50 })).toEqual({ ok: true });
+    f.setPods([pod(dep1, { ready: false, crashed: true })]);
+    expect(await waitHealthy(d, appId, dep1, { timeoutMs: 500, intervalMs: 50 })).toEqual({ ok: false, reason: 'exited' });
+    f.setPods([pod(dep1, { ready: false })]);
+    expect(await waitHealthy(d, appId, dep1, { timeoutMs: 300, intervalMs: 50 })).toEqual({ ok: false, reason: 'timeout' });
+  });
+});

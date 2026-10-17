@@ -62,6 +62,13 @@ exports[`buildKubernetesManifests > matches snapshot 1`] = `
                   "containerPort": 8080,
                 },
               ],
+              "readinessProbe": {
+                "failureThreshold": 1,
+                "periodSeconds": 2,
+                "tcpSocket": {
+                  "port": 8080,
+                },
+              },
               "resources": {
                 "limits": {
                   "cpu": "0.5",

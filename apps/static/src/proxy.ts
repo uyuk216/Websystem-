@@ -12,6 +12,20 @@ const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'p
 const EDGE_OWNED = new Set(['x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host', 'x-forwarded-port', 'forwarded', 'x-real-ip']);
 
 export interface ProxyTarget { host: string; port: number }
+/**
+ * The visitor's address. With `hops` trusted proxies in front of the edge (e.g. the cluster ingress), it is the
+ * hops-th entry from the right of X-Forwarded-For; with 0 (nothing in front) only the socket address is trusted.
+ */
+export function clientAddress(xff: string | string[] | undefined, socketAddr: string | undefined, hops: number): string {
+  const header = Array.isArray(xff) ? xff.join(',') : xff;
+  if (hops > 0 && header) {
+    const parts = header.split(',').map((p) => p.trim()).filter(Boolean);
+    const hit = parts[parts.length - hops];
+    if (hit) return hit;
+  }
+  return socketAddr ?? '';
+}
+
 export interface ProxyOptions {
   /** Protocol the public edge speaks to clients (sent as X-Forwarded-Proto). */
   proto: 'http' | 'https';
@@ -22,6 +36,8 @@ export interface ProxyOptions {
   signal?: AbortSignal;
   /** Called with every byte of the response (or upgraded stream) that is sent to the client. */
   onBytes: (n: number) => void;
+  /** Visitor address sent to the app as X-Forwarded-For (default: the socket address). */
+  clientIp?: string;
 }
 
 export type ProxyFailure = 'too_large' | 'connect' | 'timeout' | 'upstream';
@@ -100,7 +116,7 @@ export function proxyRequest(
     let done = false;
     const upstream = httpRequest({
       host: target.host, port: target.port, method: incoming.method, path: incoming.url,
-      headers: forwardHeaders(incoming.headers, incoming.socket.remoteAddress, opts.proto, false),
+      headers: forwardHeaders(incoming.headers, opts.clientIp ?? incoming.socket.remoteAddress, opts.proto, false),
       agent: false,
     });
     const fail = (why: ProxyFailure) => {
@@ -173,7 +189,7 @@ export function proxyUpgrade(
     let settled = false;
     const upstream = httpRequest({
       host: target.host, port: target.port, method: incoming.method, path: incoming.url,
-      headers: forwardHeaders(incoming.headers, incoming.socket.remoteAddress, opts.proto, true),
+      headers: forwardHeaders(incoming.headers, opts.clientIp ?? incoming.socket.remoteAddress, opts.proto, true),
       agent: false,
     });
     const fail = (why: ProxyFailure) => {

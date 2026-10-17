@@ -122,6 +122,24 @@ export async function buildImage(contextDir: string, opts: BuildOptions): Promis
   return { ok: true, imageRef: opts.tag, sizeBytes, log };
 }
 
+/**
+ * Pushes a built image to a registry the cluster pulls from (Kubernetes driver) and returns the remote ref.
+ * The local tag is kept; removeImage(remote) removes the local copy of the remote tag only.
+ */
+export async function pushImage(tag: string, registry: string, docker = 'docker'): Promise<{ ok: true; imageRef: string } | { ok: false; log: string }> {
+  // host[:port][/path], lower case; no "." / ".." path segments
+  if (!/^[a-z0-9.-]+(:[0-9]+)?(\/(?!\.+(\/|$))[a-z0-9._-]+)*$/.test(registry)) return { ok: false, log: `invalid registry: ${registry}` };
+  const remote = `${registry}/${tag}`;
+  const t = await run(docker, ['image', 'tag', tag, remote]);
+  if (t.code !== 0) return { ok: false, log: t.out };
+  const p = await run(docker, ['image', 'push', remote]);
+  if (p.code !== 0) {
+    await run(docker, ['image', 'rm', '-f', remote]);
+    return { ok: false, log: p.out };
+  }
+  return { ok: true, imageRef: remote };
+}
+
 /** Removes an image this module built (no error when it does not exist). */
 export async function removeImage(tag: string, docker = 'docker'): Promise<void> {
   await run(docker, ['image', 'rm', '-f', tag]);

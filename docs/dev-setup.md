@@ -112,16 +112,35 @@ sudo iptables -I DOCKER-USER -p tcp --dport 25 -j DROP
 
 アプリの Pod は既定で RuntimeClass `gvisor` を使います。gVisor を入れていない開発用クラスタでは `K8S_RUNTIME_CLASS=none` を設定してください（警告を出して runc で動かします。本番では使わないこと）。別の RuntimeClass 名も指定できます。
 
-Mac の k3d（`pnpm dev:up` が作る `tenant` クラスタ）で、起動・状態の確認・Service 経由の応答・ログ・稼働数の数え上げ・停止と、NetworkPolicy（`ys-system` からだけ届き、`default` からは届かない）を確かめました（2026-10-18、gVisor なし）。
+健康確認：Kubernetes ドライバでは、アプリの Pod に readinessProbe（`PORT` で接続を受け付けるか）を付け、Pod が Ready になったことを「正常」とみなします（`waitHealthy` はクラスタ外からは名前を引けない Service に接続しない）。Docker ドライバの「`GET /` が 2xx〜4xx」より弱く、5xx を返し続けるアプリも正常と判定される点に注意。
+
+イメージ：`IMAGE_REGISTRY` を設定すると、ワーカーはビルドしたイメージをそのレジストリへ push し、そこから起動します（クラスタは Mac の Docker のイメージを見られないため）。
+
+### Mac の k3d で通しで試す
+
+`pnpm dev:up` が作る `tenant` クラスタで、gVisor・レジストリ・クラスタ内のエッジまで含めて動かせます（2026-10-18 に確認）。
 
 ```bash
-kubectl config use-context k3d-tenant
-kubectl create namespace ys-system
-k3d image import <アプリのイメージ> -c tenant
-RUNTIME_DRIVER=kubernetes K8S_RUNTIME_CLASS=none pnpm dev
+bash scripts/k3d-gvisor.sh     # gVisor（runsc）をノードに入れ、RuntimeClass gvisor を作る（公式配布物を SHA-512 で確認）
+bash scripts/k3d-registry.sh   # イメージ置き場 localhost:5050 を作り、クラスタから取れるようにする
+bash scripts/k3d-edge.sh       # エッジを ys-system で動かす（.env.development から設定を作る。Mac の http://localhost:8081）
+RUNTIME_DRIVER=kubernetes IMAGE_REGISTRY=localhost:5050 K8S_RUNTIME_CLASS=gvisor pnpm dev
 ```
 
-イメージはクラスタから取得できる必要があります（k3d なら `k3d image import <イメージ> -c ys`、本番はレジストリ）。開発でビルドしたイメージはそのままでは k3d から見えない点に注意してください。
+動的アプリを作って ZIP をアップロードすると、ワーカー（Mac）がビルドして push し、持ち主の名前空間に gVisor で起動します。アクセスは `curl -H 'Host: <アプリ名>.localhost' http://localhost:8081/`。確認できたこと：
+
+- ビルド → push → 起動 → クラスタ内のエッジ経由の応答（設定値が渡る）
+- スリープ（Pod 0 個）→ 次のアクセスで約 3 秒で起動。眠っているアプリへの同時 50 件でも起動は 1 回、全員 200
+- アクセスの記録・稼働時間の記録
+- NetworkPolicy：アプリへは `ys-system` からだけ届く。アプリからは DNS・80/443 だけ出られ、25 番・`169.254.169.254`・ほかの名前空間・Kubernetes API・Mac の DB へは出られない
+- エッジの入れ替え中もエラーなし（preStop で 5 秒待ってから止める）
+
+注意：
+
+- `k3d-gvisor.sh` と `k3d-registry.sh` はノードを再起動します。k3s は再起動時に CoreDNS の `host.k3d.internal` を消すので、`k3d-edge.sh` が毎回登録し直します。
+- 新しく作った Pod は、数秒間 NetworkPolicy の「`ys-system` から」に含まれないことがあります（kube-router の反映待ち）。常駐するエッジには影響しません。
+- k3d では入口（ロードバランサー）で送信元が書き換わるため、アクセスの記録の IP は Mac ではなくクラスタ内の入口のものになります。エッジは `EDGE_TRUSTED_PROXY_HOPS`（k3d では 1）だけ `X-Forwarded-For` を信用します。本番は入口で送信元を保つ設定が必要（フェーズ 8）。
+- ワーカーと API は Mac で動かしています。クラスタ内でのビルド（rootless BuildKit）はフェーズ 8。
 
 ## 動的アプリのビルド
 

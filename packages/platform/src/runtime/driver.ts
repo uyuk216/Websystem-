@@ -17,6 +17,11 @@ export interface RunHandle {
 export type RuntimeStatus = 'running' | 'stopped' | 'starting' | 'crashed';
 
 export interface RuntimeDriver {
+  /**
+   * True when status() is 'running' only after the platform's own readiness check passed (Kubernetes
+   * readinessProbe). waitHealthy then trusts it instead of fetching the endpoint, which may only resolve in-cluster.
+   */
+  readonly readyMeansHealthy?: boolean;
   ensureImage?(image: string): Promise<void>;
   start(spec: AppRunSpec): Promise<RunHandle>;
   /** Stops every container of the app (all deployments). */

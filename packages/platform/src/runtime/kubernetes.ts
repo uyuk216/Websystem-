@@ -50,6 +50,7 @@ export interface KubernetesDriverOptions {
  * NetworkPolicy admits it.
  */
 export class KubernetesDriver implements RuntimeDriver {
+  readonly readyMeansHealthy = true;
   private apiPromise: Promise<KubeApi> | null;
   private readonly clusterDomain: string;
   private readonly runtimeClassName: string | null;

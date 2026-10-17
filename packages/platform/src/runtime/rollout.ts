@@ -28,6 +28,7 @@ export async function waitHealthy(driver: RuntimeDriver, appId: string, deployme
   for (;;) {
     const status = await driver.status(appId, deploymentId);
     if (status === 'crashed' || status === 'stopped') return { ok: false, reason: 'exited' };
+    if (status === 'running' && driver.readyMeansHealthy) return { ok: true };
     const ep = status === 'running' ? await driver.endpoint(appId, deploymentId) : null;
     if (ep) {
       try {

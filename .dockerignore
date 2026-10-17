@@ -1,0 +1,8 @@
+**/node_modules
+**/.next
+**/dist
+**/test-results
+**/playwright-report
+.git
+.env*
+!.env.development.example

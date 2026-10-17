@@ -5,7 +5,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createWriteStream } from 'node:fs';
 import { eq, sql } from 'drizzle-orm';
-import { DockerDriver, KubernetesDriver, buildImage, collectLogs, detectStack, extractArchive, removeImage, waitHealthy, type AppRunSpec, type ArchiveFormat, type HealthOptions, type RuntimeDriver, type Storage } from 'platform';
+import { DockerDriver, KubernetesDriver, buildImage, pushImage, collectLogs, detectStack, extractArchive, removeImage, waitHealthy, type AppRunSpec, type ArchiveFormat, type HealthOptions, type RuntimeDriver, type Storage } from 'platform';
 import { DYNAMIC_LIMITS } from 'shared';
 import { withSystem, type Db } from '../db/client.js';
 import { getAppEnvForRun } from '../apps/env-vars.js';
@@ -62,6 +62,8 @@ export interface DynamicRuntime {
   health?: HealthOptions;
   /** Cross-process per-app lock (see createWakeLocker). Held by rollouts so the sleeper and edge wakes never race them. */
   lock?: <T>(appId: string, fn: () => Promise<T>, opts?: { timeoutMs?: number }) => Promise<T>;
+  /** Registry the built images are pushed to (IMAGE_REGISTRY); needed when the cluster cannot see local Docker images. */
+  imageRegistry?: string;
 }
 
 /**
@@ -76,7 +78,10 @@ export function createDynamicRuntime(env: NodeJS.ProcessEnv): DynamicRuntime | u
   if (envKey.length !== 32) throw new Error('APP_ENV_KEY must be 32 bytes (base64)');
   const kind = env.RUNTIME_DRIVER ?? 'docker';
   if (kind !== 'docker' && kind !== 'kubernetes') throw new Error(`RUNTIME_DRIVER must be docker or kubernetes (got ${kind})`);
-  return { driver: kind === 'kubernetes' ? new KubernetesDriver() : new DockerDriver(), envKey };
+  return {
+    driver: kind === 'kubernetes' ? new KubernetesDriver() : new DockerDriver(), envKey,
+    ...(env.IMAGE_REGISTRY ? { imageRegistry: env.IMAGE_REGISTRY } : {}),
+  };
 }
 
 export const runLimits = { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids };
@@ -209,6 +214,7 @@ export async function processDynamicDeployment(db: Db, storage: Storage, job: Dy
 
   const dir = await mkdtemp(join(tmpdir(), 'ys-ctx-'));
   const tag = imageTag(appId, deploymentId);
+  let imageRef = tag; // becomes the registry ref once pushed
   let handedOff = false;
   try {
     await extractTo(storage, job, dir);
@@ -230,9 +236,19 @@ export async function processDynamicDeployment(db: Db, storage: Storage, job: Dy
     await storage.sources.put(logKey, Buffer.from(result.log), 'text/plain; charset=utf-8');
     const common = { buildLogKey: logKey, totalBytes: out.bytes, fileCount: out.files };
     if (!result.ok) return await finish({ ...common, status: 'failed', message: BUILD_ERROR[result.reason] });
+    imageRef = result.imageRef;
+    if (rt?.imageRegistry) {
+      const pushed = await pushImage(result.imageRef, rt.imageRegistry);
+      if (!pushed.ok) {
+        await storage.sources.put(logKey, Buffer.from(`${result.log}\n[image push failed]\n${pushed.log}`), 'text/plain; charset=utf-8');
+        return await finish({ ...common, status: 'failed', message: 'deploy.error.build_failed' });
+      }
+      imageRef = pushed.imageRef;
+      await removeImage(result.imageRef).catch(() => undefined); // the pushed tag stays until the deployment is removed
+    }
 
     const updated = await withSystem(db, async (tx) => {
-      const rows = await tx.update(deployments).set({ ...common, imageRef: result.imageRef })
+      const rows = await tx.update(deployments).set({ ...common, imageRef })
         .where(sql`${deployments.id} = ${deploymentId} AND ${deployments.status} = 'processing'`).returning({ id: deployments.id });
       return rows.length;
     });
@@ -241,7 +257,10 @@ export async function processDynamicDeployment(db: Db, storage: Storage, job: Dy
     handedOff = true;
   } finally {
     // Every path except a successful hand-off must not leave the image behind (failure, retry, deleted app).
-    if (!handedOff) await removeImage(tag).catch(() => undefined);
+    if (!handedOff) {
+      await removeImage(tag).catch(() => undefined);
+      if (imageRef !== tag) await removeImage(imageRef).catch(() => undefined);
+    }
     await rm(dir, { recursive: true, force: true });
   }
 }

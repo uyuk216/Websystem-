@@ -60,6 +60,8 @@ export function buildKubernetesManifests(spec: AppRunSpec, opts: ManifestOptions
                 imagePullPolicy: 'IfNotPresent',
                 env,
                 ports: [{ containerPort: spec.port }],
+                // Ready once the app accepts connections on PORT (the health check for the rollout and wakes).
+                readinessProbe: { tcpSocket: { port: spec.port }, periodSeconds: 2, failureThreshold: 1 },
                 securityContext: {
                   runAsNonRoot: true,
                   privileged: false,

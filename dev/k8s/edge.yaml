@@ -1,0 +1,107 @@
+# Development: the edge (apps/static) inside the k3d tenant cluster, in ys-system (the only namespace the
+# per-owner NetworkPolicy admits). It reaches apps by Service DNS and wakes them through the Kubernetes driver.
+# Applied by scripts/k3d-edge.sh, which also creates the ys-edge-env Secret from .env.development.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ys-edge
+  namespace: ys-system
+automountServiceAccountToken: true
+---
+# What KubernetesDriver needs: apply the per-owner objects, read workloads and pods, read pod logs, delete workloads.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ys-runtime
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, services, resourcequotas, limitranges]
+    verbs: [get, list, create, patch, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, create, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, create, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ys-edge-runtime
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ys-runtime
+subjects:
+  - kind: ServiceAccount
+    name: ys-edge
+    namespace: ys-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ys-edge
+  namespace: ys-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ys-edge }
+  template:
+    metadata:
+      labels: { app: ys-edge }
+    spec:
+      serviceAccountName: ys-edge
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: edge
+          image: localhost:5050/ys/edge:dev
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef: { name: ys-edge-env }
+          env:
+            - { name: RUNTIME_DRIVER, value: kubernetes }
+            - { name: EDGE_PROTO, value: http }
+            # Traefik (the cluster ingress) is the one proxy in front of the edge.
+            - { name: EDGE_TRUSTED_PROXY_HOPS, value: "1" }
+          ports:
+            - containerPort: 8090
+          readinessProbe:
+            tcpSocket: { port: 8090 }
+            periodSeconds: 3
+          # Keep serving while the ingress drops this pod from its endpoints; only then does SIGTERM close the server.
+          lifecycle:
+            preStop:
+              exec: { command: [sleep, "5"] }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ys-edge
+  namespace: ys-system
+spec:
+  selector: { app: ys-edge }
+  ports:
+    - port: 80
+      targetPort: 8090
+---
+# Every host goes to the edge; the k3d load balancer publishes it on the Mac at localhost:8081.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ys-edge
+  namespace: ys-system
+spec:
+  defaultBackend:
+    service:
+      name: ys-edge
+      port: { number: 80 }
