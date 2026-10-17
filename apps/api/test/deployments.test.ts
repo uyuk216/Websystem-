@@ -234,12 +234,13 @@ describe('deployments', () => {
 
   it('oversized archive is rejected with too_large and nothing is stored', () => withTestDb(async (db) => {
     const { a, appId } = await setup(db);
-    const big = Readable.from((async function* () { for (let i = 0; i < 3; i++) yield Buffer.alloc(100 * 1024 * 1024); })());
-    const r = await createDeployment(db, storage, queue, a.id, appId, { source: 'upload', archive: big, format: 'zip' });
+    // A 1 MB cap instead of the real one keeps this fast; the cap logic is the same.
+    const big = Readable.from((async function* () { for (let i = 0; i < 4; i++) yield Buffer.alloc(512 * 1024); })());
+    const r = await createDeployment(db, storage, queue, a.id, appId, { source: 'upload', archive: big, format: 'zip', maxBytes: 1024 * 1024 });
     expect(r).toEqual({ error: 'too_large' });
     expect(await storage.sources.list(`${appId}/`)).toEqual([]);
     expect(await db.select().from(deployments)).toEqual([]);
-  }), 60000);
+  }));
 
   it('deleteApp cleanup removes sources and sites', () => withTestDb(async (db) => {
     const { a, appId } = await setup(db);

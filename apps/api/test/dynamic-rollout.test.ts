@@ -109,7 +109,8 @@ describe('dynamic rollout', () => {
     await setEnvVar(db, envKey, s.accountId, s.appId, 'API_SECRET', 'topsecretvalue');
     const v1 = await deploy(db, s, app('v1'));
     const bad = await deploy(db, s, app('x', { cmd: 'echo boom-marker $API_SECRET; exit 1' }));
-    expect(bad).toMatchObject({ status: 'failed', message: 'deploy.error.app_exited' });
+    // On a mismatch, show the build/run logs: this once failed as build_failed in a busy full run.
+    expect(bad, JSON.stringify(bad.findings)).toMatchObject({ status: 'failed', message: 'deploy.error.app_exited' });
     const logs = (bad.findings as { logs: string[] }).logs.join('\n');
     expect(logs).toContain('boom-marker');
     expect(logs).not.toContain('topsecretvalue');
