@@ -23,6 +23,7 @@ export function DynamicPanel({ id, active, statusLabel }: { id: string; active: 
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [failLogs, setFailLogs] = useState<string[]>([]);
+  const [restarting, setRestarting] = useState(false);
 
   const fail = useCallback((err: unknown) => setError(t(err instanceof ApiError ? errorKey(err.code) : 'common.error')), [t]);
   const loadEnv = useCallback(() => api<{ vars: EnvVar[] }>(`/apps/${id}/env`).then((r) => setVars(r.vars)).catch(fail), [id, fail]);
@@ -47,13 +48,15 @@ export function DynamicPanel({ id, active, statusLabel }: { id: string; active: 
     try { await api(`/apps/${id}/env/${encodeURIComponent(n)}`, { method: 'DELETE' }); await loadEnv(); } catch (err) { fail(err); }
   }
   async function restart() {
+    if (restarting) return;
+    setRestarting(true);
     setError(null); setMsg(null); setFailLogs([]);
     try { await api(`/apps/${id}/restart`, { method: 'POST' }); setMsg(t('dyn.restarted')); await loadLogs(); } catch (err) {
       if (err instanceof ApiError && err.code === 'start_failed') {
         const logs = (err.body as { logs?: unknown }).logs;
         setError(t('dyn.restartFailed')); setFailLogs(Array.isArray(logs) ? logs.map(String) : []);
       } else fail(err);
-    }
+    } finally { setRestarting(false); }
   }
   const row = (key: MessageKey, p: Period) => <li>{t(key)}: {hours(p.minutes)} / {hours(p.limitMinutes)} h</li>;
 
@@ -99,7 +102,7 @@ export function DynamicPanel({ id, active, statusLabel }: { id: string; active: 
         <input id="evv" type="password" value={value} autoComplete="off" required onChange={(e) => setValue(e.target.value)} />
         <button type="submit">{t('dyn.env.set')}</button>
       </form>
-      <button type="button" onClick={() => void restart()} disabled={!active}>{t('dyn.restart')}</button>
+      <button type="button" onClick={() => void restart()} disabled={!active || restarting} aria-busy={restarting}>{t('dyn.restart')}</button>
 
       <h2>{t('dyn.logs.title')}</h2>
       <button type="button" className="secondary" onClick={() => void loadLogs()}>{t('dyn.logs.refresh')}</button>
