@@ -85,6 +85,9 @@ describe('signup', () => {
       const mail = createFakeMailer();
       const r = await start(db, mail, 'new@example.com', 'signup');
       if (!('challengeId' in r)) throw new Error('rate');
+      // A signup mail carries only the code: the login link cannot complete a signup, so it must not be offered.
+      expect(mail.lastLinkToken()).toBe('');
+      expect(mail.lastBodyTo('new@example.com')).not.toContain('/login/link');
       const s = { ...base, requesterDeviceId: 'd1', email: 'new@example.com', challengeId: r.challengeId, code: mail.lastCode() };
       expect(await registerAccount(db, { ...s, birthDate: '2015-01-01' }, cfg)).toEqual({ error: 'under13' });
       expect(await registerAccount(db, { ...s, requesterDeviceId: 'other', birthDate: '2008-04-02' }, cfg)).toEqual({ error: 'invalid' });

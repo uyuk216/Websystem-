@@ -6,6 +6,7 @@ export const en = {
   'age.under13': 'Users under 13 cannot use this service.',
   'age.invalid': 'The birth date is not valid.',
   'login.mailSubject': 'Your verification code',
+  'signup.mailBody': 'Verification code: {code}\n\nEnter this code on the screen where you started signing up (valid for 10 minutes).\n\nIf you did not request this, ignore this email.',
   'login.mailBody': 'Verification code: {code}\n\nYou can also open this link on the same device (valid for 10 minutes).\n{link}\n\nIf you did not request this, ignore this email.',
   'login.existsSubject': 'You already have an account',
   'login.existsBody': 'An account already exists for this email address. Please log in instead of signing up.\n{origin}\n\nIf you did not request this, ignore this email.',

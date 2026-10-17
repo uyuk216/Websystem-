@@ -67,7 +67,12 @@ export async function startEmailChallenge(
     const subject = t(input.locale, 'login.existsSubject');
     const body = t(input.locale, 'login.existsBody', { origin: cfg.appOrigin });
     send = () => mailer.sendMail(email, subject, body);
-  } else if (input.purpose === 'signup' || account) {
+  } else if (input.purpose === 'signup') {
+    // No link: signing up continues on the screen that asked for the code (the link only logs in).
+    const subject = t(input.locale, 'login.mailSubject');
+    const body = t(input.locale, 'signup.mailBody', { code });
+    send = () => mailer.sendMail(email, subject, body);
+  } else if (account) {
     const link = `${cfg.appOrigin}/login/link?c=${challengeId}&t=${token}`;
     const subject = t(input.locale, 'login.mailSubject');
     const body = t(input.locale, 'login.mailBody', { code, link });
