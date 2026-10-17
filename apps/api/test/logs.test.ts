@@ -35,7 +35,8 @@ describe('access logs', () => {
     expect(rows.map((r) => r.ipPrefix).sort()).toEqual(['2001:db8:1234::/48', '203.0.113.0/24']);
     expect(rows.find((r) => r.path === '/x')).toMatchObject({ uaKind: 'browser', referrer: 'https://e.com' });
     expect(uaKind('Googlebot/2.1')).toBe('bot');
-    expect(JSON.stringify(rows)).not.toContain('77');
+    // The full address never reaches the table (check the IP column only: ids and timestamps may contain "77").
+    expect(rows.every((r) => !r.ipPrefix.includes('.77'))).toBe(true);
   }));
 
   it('purges rows older than 30 days', () => withTestDb(async (db) => {
