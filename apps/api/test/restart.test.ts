@@ -57,7 +57,9 @@ describe('restart', () => {
     const s = await setup(db, 'dynamic');
     const other = await setup(db, 'static', false);
     expect(await restart(db, other.accountId, s.appId, fake(true).rt)).toEqual({ error: 'not_found' });
-    const r = await restart(db, s.accountId, s.appId, fake(false).rt);
-    expect(r).toMatchObject({ error: 'start_failed' });
+    const bad = fake(false);
+    const r = await restart(db, s.accountId, s.appId, bad.rt);
+    expect(r).toMatchObject({ error: 'start_failed', logs: ['boom'] });
+    expect(bad.calls).toEqual(['stop', 'start', 'stop']); // the broken container is not left behind
   }));
 });

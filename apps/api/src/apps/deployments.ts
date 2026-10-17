@@ -274,6 +274,8 @@ export async function restart(
       const health = await waitHealthy(rt.driver, appId, pre.deploymentId, rt.health);
       if (!health.ok) {
         const logs = await collectLogs(rt.driver, appId, pre.deploymentId, Object.values(env));
+        // Leave the app asleep rather than with a broken container, so the next request goes through the normal wake path.
+        await rt.driver.stopDeployment(appId, pre.deploymentId).catch((e: unknown) => console.error('stop after failed restart', appId, e));
         return { error: 'start_failed', reason: health.reason === 'exited' ? 'deploy.error.app_exited' : 'deploy.error.health_check_failed', logs };
       }
       return null;
