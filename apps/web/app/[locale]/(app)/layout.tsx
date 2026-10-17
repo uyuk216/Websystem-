@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
+import { Breadcrumb, Sidebar } from '@/components/sidebar';
 import { api, ApiError } from '@/lib/api';
 import { useI18n } from '@/lib/i18n';
 
@@ -26,28 +26,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (failed) {
     return (
-      <main>
+      <main className="center">
         <p role="alert" className="error">{t('common.loadError')}</p>
         <button type="button" onClick={() => setAttempt((n) => n + 1)}>{t('common.retry')}</button>
       </main>
     );
   }
-  if (!ready) return <main><p role="status">{t('common.loading')}</p></main>;
+  if (!ready) return <main className="center"><p role="status">{t('common.loading')}</p></main>;
   return (
-    <>
-      <header className="shell">
-        <strong>{t('app.name')}</strong>
-        <nav aria-label="main">
-          <Link href={`/${locale}/apps`}>{t('nav.apps')}</Link>
-          <Link href={`/${locale}/settings/tokens`}>{t('nav.tokens')}</Link>
-          <Link href={`/${locale}/settings/devices`}>{t('nav.devices')}</Link>
-          <Link href={`/${locale}/settings/logins`}>{t('nav.logins')}</Link>
-          <Link href={`/${locale}/settings/passkeys`}>{t('nav.passkeys')}</Link>
-          <Link href={`/${locale}/teams`}>{t('nav.teams')}</Link>
-        </nav>
-        <button type="button" className="secondary" onClick={() => void logout()}>{t('nav.logout')}</button>
-      </header>
-      <main>{children}</main>
-    </>
+    <div className="app-shell">
+      <Sidebar onLogout={() => void logout()} />
+      <main className="content">
+        <Breadcrumb />
+        {children}
+      </main>
+    </div>
   );
 }
