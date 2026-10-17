@@ -90,7 +90,7 @@ describe('mail failures', () => {
       if ('error' in r) throw new Error('expected ok');
       const out = await approveRecovery(db, bad, r.requestId, cfg);
       expect(out.mailFailed).toBe(true);
-      expect(out.newRecoveryCode).toHaveLength(16);
+      expect(out.newRecoveryCode.replaceAll('-', '')).toHaveLength(32);
       const [row] = await db.select().from(accounts);
       expect(await verifyRecoveryCode(out.newRecoveryCode, row!.recoveryCodeHash!)).toBe(true);
     }));

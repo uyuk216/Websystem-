@@ -133,7 +133,9 @@ export default function SignupPage() {
           <p>{t('signup.recoveryLead')}</p>
           <p className="notice" role="note"><strong>{t('signup.recoveryWarn')}</strong></p>
           <p className="recovery-label" id="rc-label">{t('signup.recoveryLabel')}</p>
-          <code className="recovery" data-testid="recovery-code" aria-labelledby="rc-label">{recoveryCode}</code>
+          <code className="recovery" data-testid="recovery-code" aria-labelledby="rc-label">
+            {recoveryCode.split('-').map((g, i) => <span key={i}>{i > 0 && '-'}{g}</span>)}
+          </code>
           <div className="actions noprint">
             <button type="button" onClick={download}>{t('signup.download')} (.txt)</button>
             <button type="button" className="secondary" onClick={() => void copy()}>{copied ? t('signup.copied') : t('signup.copy')}</button>
