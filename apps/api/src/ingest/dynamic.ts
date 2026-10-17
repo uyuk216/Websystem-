@@ -5,7 +5,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createWriteStream } from 'node:fs';
 import { eq, sql } from 'drizzle-orm';
-import { DockerDriver, buildImage, collectLogs, detectStack, extractArchive, removeImage, waitHealthy, type AppRunSpec, type ArchiveFormat, type HealthOptions, type RuntimeDriver, type Storage } from 'platform';
+import { DockerDriver, KubernetesDriver, buildImage, collectLogs, detectStack, extractArchive, removeImage, waitHealthy, type AppRunSpec, type ArchiveFormat, type HealthOptions, type RuntimeDriver, type Storage } from 'platform';
 import { DYNAMIC_LIMITS } from 'shared';
 import { withSystem, type Db } from '../db/client.js';
 import { getAppEnvForRun } from '../apps/env-vars.js';
@@ -66,7 +66,7 @@ export interface DynamicRuntime {
 
 /**
  * Builds the runtime from the process environment. DYNAMIC_RUNTIME=off disables it (undefined); otherwise a
- * Docker driver is used and APP_ENV_KEY (32 bytes, base64) must be set, or this throws.
+ * Docker driver (or the Kubernetes driver with RUNTIME_DRIVER=kubernetes) is used and APP_ENV_KEY (32 bytes, base64) must be set, or this throws.
  */
 export function createDynamicRuntime(env: NodeJS.ProcessEnv): DynamicRuntime | undefined {
   if (env.DYNAMIC_RUNTIME === 'off') return undefined;
@@ -74,7 +74,9 @@ export function createDynamicRuntime(env: NodeJS.ProcessEnv): DynamicRuntime | u
   if (!raw) throw new Error('APP_ENV_KEY is required when the dynamic runtime is enabled (set DYNAMIC_RUNTIME=off to disable it)');
   const envKey = Buffer.from(raw, 'base64');
   if (envKey.length !== 32) throw new Error('APP_ENV_KEY must be 32 bytes (base64)');
-  return { driver: new DockerDriver(), envKey };
+  const kind = env.RUNTIME_DRIVER ?? 'docker';
+  if (kind !== 'docker' && kind !== 'kubernetes') throw new Error(`RUNTIME_DRIVER must be docker or kubernetes (got ${kind})`);
+  return { driver: kind === 'kubernetes' ? new KubernetesDriver() : new DockerDriver(), envKey };
 }
 
 export const runLimits = { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids };

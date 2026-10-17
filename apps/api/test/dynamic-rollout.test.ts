@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { DockerDriver, createStorage, loadStorageConfig, type Storage } from 'platform';
+import { DockerDriver, KubernetesDriver, createStorage, loadStorageConfig, type Storage } from 'platform';
 import { makeZip } from '../../../packages/platform/test/ingest/helpers.js';
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { accounts, apps, deployments, owners, teamMembers, teams } from '../src/db/schema.js';
@@ -152,6 +152,13 @@ describe('runtime configuration', () => {
     expect(() => createDynamicRuntime({ APP_ENV_KEY: 'c2hvcnQ=' })).toThrow(/32 bytes/);
     expect(createDynamicRuntime({ DYNAMIC_RUNTIME: 'off' })).toBeUndefined();
     expect(createDynamicRuntime({ APP_ENV_KEY: randomBytes(32).toString('base64') })?.envKey).toHaveLength(32);
+  });
+
+  it('selects the driver with RUNTIME_DRIVER', () => {
+    const key = randomBytes(32).toString('base64');
+    expect(createDynamicRuntime({ APP_ENV_KEY: key, RUNTIME_DRIVER: 'kubernetes' })?.driver).toBeInstanceOf(KubernetesDriver);
+    expect(createDynamicRuntime({ APP_ENV_KEY: key, RUNTIME: 'runc' })?.driver).toBeInstanceOf(DockerDriver);
+    expect(() => createDynamicRuntime({ APP_ENV_KEY: key, RUNTIME_DRIVER: 'podman' })).toThrow(/RUNTIME_DRIVER/);
   });
 
   it('setEnvVar does not fail when an existing row cannot be decrypted', () => withTestDb(async (db) => {
