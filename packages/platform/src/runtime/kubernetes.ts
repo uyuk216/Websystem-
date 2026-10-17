@@ -1,3 +1,4 @@
+import { request as httpsRequest, type RequestOptions } from 'node:https';
 import { assertUuid } from './driver.js';
 import type { AppRunSpec, RunHandle, RuntimeDriver, RuntimeStatus } from './driver.js';
 import { buildKubernetesManifests, workloadName } from './kubernetes-manifests.js';
@@ -38,6 +39,9 @@ export interface KubernetesDriverOptions {
   api?: KubeApi;
   /** Cluster DNS suffix for Service endpoints. */
   clusterDomain?: string;
+  /** Pod RuntimeClass; defaults to K8S_RUNTIME_CLASS or "gvisor". "none" omits it (development only). */
+  runtimeClass?: string;
+  warn?: (message: string) => void;
 }
 
 /**
@@ -48,10 +52,16 @@ export interface KubernetesDriverOptions {
 export class KubernetesDriver implements RuntimeDriver {
   private apiPromise: Promise<KubeApi> | null;
   private readonly clusterDomain: string;
+  private readonly runtimeClassName: string | null;
 
   constructor(options: KubernetesDriverOptions = {}) {
     this.apiPromise = options.api ? Promise.resolve(options.api) : null;
     this.clusterDomain = options.clusterDomain ?? 'cluster.local';
+    const rc = options.runtimeClass ?? (process.env.K8S_RUNTIME_CLASS || 'gvisor');
+    this.runtimeClassName = rc === 'none' ? null : rc;
+    if (!this.runtimeClassName) {
+      (options.warn ?? ((m) => console.warn(m)))('K8S_RUNTIME_CLASS=none: app pods run without gVisor (development only)');
+    }
   }
 
   private api(): Promise<KubeApi> {
@@ -65,7 +75,7 @@ export class KubernetesDriver implements RuntimeDriver {
   async start(spec: AppRunSpec): Promise<RunHandle> {
     const api = await this.api();
     const name = workloadName(spec.appId, spec.deploymentId);
-    for (const obj of buildKubernetesManifests(spec)) {
+    for (const obj of buildKubernetesManifests(spec, { runtimeClassName: this.runtimeClassName })) {
       const o = obj as { kind: string; metadata: { annotations?: Record<string, string> } };
       if (o.kind === 'Deployment') {
         o.metadata.annotations = { ...o.metadata.annotations, [PORT_ANNOTATION]: String(spec.port) };
@@ -145,6 +155,24 @@ export class KubernetesDriver implements RuntimeDriver {
 
 const FIELD_MANAGER = 'ys-runtime';
 
+/** REST path of each kind buildKubernetesManifests produces. */
+const RESOURCE: Record<string, { base: string; plural: string; namespaced: boolean }> = {
+  Namespace: { base: '/api/v1', plural: 'namespaces', namespaced: false },
+  Deployment: { base: '/apis/apps/v1', plural: 'deployments', namespaced: true },
+  Service: { base: '/api/v1', plural: 'services', namespaced: true },
+  NetworkPolicy: { base: '/apis/networking.k8s.io/v1', plural: 'networkpolicies', namespaced: true },
+  ResourceQuota: { base: '/api/v1', plural: 'resourcequotas', namespaced: true },
+  LimitRange: { base: '/api/v1', plural: 'limitranges', namespaced: true },
+};
+
+/** URL path for a server-side apply of `obj`. */
+export function applyPath(obj: { kind: string; metadata: { name: string; namespace?: string } }): string {
+  const r = RESOURCE[obj.kind];
+  if (!r) throw new Error(`unsupported kind: ${obj.kind}`);
+  const ns = r.namespaced ? `/namespaces/${encodeURIComponent(obj.metadata.namespace ?? '')}` : '';
+  return `${r.base}${ns}/${r.plural}/${encodeURIComponent(obj.metadata.name)}?fieldManager=${FIELD_MANAGER}&force=true`;
+}
+
 function isNotFound(err: unknown): boolean {
   const e = err as { code?: number; statusCode?: number; body?: { code?: number } };
   return e.code === 404 || e.statusCode === 404 || e.body?.code === 404;
@@ -155,13 +183,32 @@ async function createClientNodeApi(): Promise<KubeApi> {
   const k8s = await import('@kubernetes/client-node');
   const kc = new k8s.KubeConfig();
   kc.loadFromDefault();
-  const objects = k8s.KubernetesObjectApi.makeApiClient(kc);
   const apps = kc.makeApiClient(k8s.AppsV1Api);
   const core = kc.makeApiClient(k8s.CoreV1Api);
 
   return {
+    // Sent as raw JSON: the client's typed serializer drops fields it names differently (NetworkPolicy
+    // `from` is `_from` in its models), which silently turned the isolation policy into allow-all.
     async apply(obj) {
-      await objects.patch(obj as never, undefined, undefined, FIELD_MANAGER, true, k8s.PatchStrategy.ServerSideApply);
+      const cluster = kc.getCurrentCluster();
+      if (!cluster) throw new Error('no current Kubernetes cluster in the kubeconfig');
+      const url = new URL(applyPath(obj as Parameters<typeof applyPath>[0]), cluster.server);
+      const body = JSON.stringify(obj);
+      const opts: RequestOptions = {
+        method: 'PATCH', hostname: url.hostname, port: url.port || 443, path: url.pathname + url.search,
+        headers: { 'content-type': 'application/apply-patch+yaml', accept: 'application/json', 'content-length': Buffer.byteLength(body) },
+      };
+      await kc.applyToHTTPSOptions(opts);
+      await new Promise<void>((resolve, reject) => {
+        const req = httpsRequest(opts, (res) => {
+          let text = '';
+          res.setEncoding('utf8');
+          res.on('data', (c: string) => { if (text.length < 4096) text += c; });
+          res.on('end', () => ((res.statusCode ?? 500) < 300 ? resolve() : reject(new Error(`apply ${(obj as { kind: string }).kind} failed (${res.statusCode}): ${text}`))));
+        });
+        req.on('error', reject);
+        req.end(body);
+      });
     },
     async listWorkloads(labelSelector) {
       const res = await apps.listDeploymentForAllNamespaces({ labelSelector });

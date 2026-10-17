@@ -14,7 +14,13 @@ export function workloadName(appId: string, deploymentId: string): string {
 }
 
 /** Pure manifest builder; applied by KubernetesDriver. */
-export function buildKubernetesManifests(spec: AppRunSpec): object[] {
+export interface ManifestOptions {
+  /** RuntimeClass for app pods. Null omits it (development clusters without gVisor only). */
+  runtimeClassName?: string | null;
+}
+
+export function buildKubernetesManifests(spec: AppRunSpec, opts: ManifestOptions = {}): object[] {
+  const runtimeClassName = opts.runtimeClassName === undefined ? 'gvisor' : opts.runtimeClassName;
   const ns = namespaceFor(spec.ownerId);
   const name = workloadName(spec.appId, spec.deploymentId);
   // One Deployment/Service per deployment so a new version can pass its health check before the switch.
@@ -43,7 +49,7 @@ export function buildKubernetesManifests(spec: AppRunSpec): object[] {
         template: {
           metadata: { labels },
           spec: {
-            runtimeClassName: 'gvisor',
+            ...(runtimeClassName ? { runtimeClassName } : {}),
             automountServiceAccountToken: false,
             enableServiceLinks: false,
             securityContext: { runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, seccompProfile: { type: 'RuntimeDefault' } },

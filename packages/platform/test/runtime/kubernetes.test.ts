@@ -111,3 +111,34 @@ describe('KubernetesDriver (mocked API)', () => {
     await expect(d.stop('x,ys.app')).rejects.toThrow(/UUID/);
   });
 });
+
+describe('KubernetesDriver runtime class', () => {
+  it('uses gvisor by default and omits it only with runtimeClass "none"', async () => {
+    const rc = async (opts: { runtimeClass?: string }) => {
+      const f = fakeApi();
+      await new KubernetesDriver({ api: f.api, warn: () => {}, ...opts }).start(spec(dep1));
+      const d = f.applied.find((o) => o.kind === 'Deployment') as unknown as { spec: { template: { spec: { runtimeClassName?: string } } } };
+      return d.spec.template.spec.runtimeClassName;
+    };
+    expect(await rc({})).toBe('gvisor');
+    expect(await rc({ runtimeClass: 'kata' })).toBe('kata');
+    expect(await rc({ runtimeClass: 'none' })).toBeUndefined();
+  });
+});
+
+describe('applyPath', () => {
+  it('maps each manifest kind to its server-side apply URL', async () => {
+    const { applyPath } = await import('../../src/runtime/kubernetes.js');
+    const { buildKubernetesManifests } = await import('../../src/runtime/kubernetes-manifests.js');
+    const paths = buildKubernetesManifests(spec(dep1)).map((o) => applyPath(o as Parameters<typeof applyPath>[0]));
+    expect(paths).toEqual([
+      `/api/v1/namespaces/${ns}?fieldManager=ys-runtime&force=true`,
+      `/apis/apps/v1/namespaces/${ns}/deployments/ys-app-${appId}-22222222?fieldManager=ys-runtime&force=true`,
+      `/api/v1/namespaces/${ns}/services/ys-app-${appId}-22222222?fieldManager=ys-runtime&force=true`,
+      `/apis/networking.k8s.io/v1/namespaces/${ns}/networkpolicies/ys-app-isolation?fieldManager=ys-runtime&force=true`,
+      `/api/v1/namespaces/${ns}/resourcequotas/ys-owner-quota?fieldManager=ys-runtime&force=true`,
+      `/api/v1/namespaces/${ns}/limitranges/ys-owner-limits?fieldManager=ys-runtime&force=true`,
+    ]);
+    expect(() => applyPath({ kind: 'Secret', metadata: { name: 'x' } })).toThrow(/unsupported/);
+  });
+});

@@ -110,14 +110,15 @@ sudo iptables -I DOCKER-USER -p tcp --dport 25 -j DROP
 
 アプリには Service の DNS 名（`<名前>.<namespace>.svc.cluster.local`）でつなぐので、エッジ（`apps/static`）はクラスタ内の `ys-system` 名前空間で動かす必要があります。NetworkPolicy が受け付けるのはこの名前空間からの通信だけです。認証情報はクラスタ内ならサービスアカウント、外なら `KUBECONFIG`（または `~/.kube/config`）から読みます。
 
-Mac で試す手順は次のとおりです（**未検証**：開発用のコンテナでは k3d が起動しなかったため、テストは `@kubernetes/client-node` をモックにしたものだけです）。
+アプリの Pod は既定で RuntimeClass `gvisor` を使います。gVisor を入れていない開発用クラスタでは `K8S_RUNTIME_CLASS=none` を設定してください（警告を出して runc で動かします。本番では使わないこと）。別の RuntimeClass 名も指定できます。
+
+Mac の k3d（`pnpm dev:up` が作る `tenant` クラスタ）で、起動・状態の確認・Service 経由の応答・ログ・稼働数の数え上げ・停止と、NetworkPolicy（`ys-system` からだけ届き、`default` からは届かない）を確かめました（2026-10-18、gVisor なし）。
 
 ```bash
-k3d cluster create ys --agents 1
+kubectl config use-context k3d-tenant
 kubectl create namespace ys-system
-# gVisor を使う場合は、ノードに runsc を入れて RuntimeClass "gvisor" を作る。
-# 入れない場合、マニフェストの runtimeClassName: gvisor のせいで Pod が起動しない。
-RUNTIME_DRIVER=kubernetes pnpm dev
+k3d image import <アプリのイメージ> -c tenant
+RUNTIME_DRIVER=kubernetes K8S_RUNTIME_CLASS=none pnpm dev
 ```
 
 イメージはクラスタから取得できる必要があります（k3d なら `k3d image import <イメージ> -c ys`、本番はレジストリ）。開発でビルドしたイメージはそのままでは k3d から見えない点に注意してください。
