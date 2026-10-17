@@ -100,6 +100,28 @@ sudo iptables -I DOCKER-USER -p tcp --dport 25 -j DROP
 
 `ys-apps` は `com.docker.network.bridge.enable_icc=false` で作成され、アプリ同士は通信できません（既存のネットワークが無効化されていない場合は、コンテナがなければ自動で作り直します）。コンテナ名は `ys-app-<appId>-<deploymentId 先頭 8 文字>` で、同じアプリの新旧デプロイを同時に動かせます。
 
+## 動的アプリのランタイム（Kubernetes ドライバ）
+
+`RUNTIME_DRIVER=kubernetes` を設定すると、API とワーカーは `packages/platform/src/runtime/kubernetes.ts` を使います（既定は `docker`）。起動のたびに `buildKubernetesManifests` のマニフェストを server-side apply し、次のものを作ります。
+
+- 持ち主ごとの Namespace（`ys-o-<ownerId>`、Pod Security `restricted`）
+- デプロイごとの Deployment と Service（`ys-app-<appId>-<deploymentId 先頭 8 文字>`）
+- NetworkPolicy・ResourceQuota・LimitRange
+
+アプリには Service の DNS 名（`<名前>.<namespace>.svc.cluster.local`）でつなぐので、エッジ（`apps/static`）はクラスタ内の `ys-system` 名前空間で動かす必要があります。NetworkPolicy が受け付けるのはこの名前空間からの通信だけです。認証情報はクラスタ内ならサービスアカウント、外なら `KUBECONFIG`（または `~/.kube/config`）から読みます。
+
+Mac で試す手順は次のとおりです（**未検証**：開発用のコンテナでは k3d が起動しなかったため、テストは `@kubernetes/client-node` をモックにしたものだけです）。
+
+```bash
+k3d cluster create ys --agents 1
+kubectl create namespace ys-system
+# gVisor を使う場合は、ノードに runsc を入れて RuntimeClass "gvisor" を作る。
+# 入れない場合、マニフェストの runtimeClassName: gvisor のせいで Pod が起動しない。
+RUNTIME_DRIVER=kubernetes pnpm dev
+```
+
+イメージはクラスタから取得できる必要があります（k3d なら `k3d image import <イメージ> -c ys`、本番はレジストリ）。開発でビルドしたイメージはそのままでは k3d から見えない点に注意してください。
+
 ## 動的アプリのビルド
 
 - 開発・テストではクラシックビルダー（`DOCKER_BUILDKIT=0`）で `docker build` を実行する。ビルド手順のコンテナにメモリ 1GB（スワップ込み）・CPU 1 を適用でき、BuildKit では効かないため。
