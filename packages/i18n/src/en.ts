@@ -201,6 +201,8 @@ export const en = {
   'apps.limit': 'You have reached the site limit.',
   'apps.siteUrl': 'Site URL',
   'apps.publishDir': 'Publish directory',
+  'apps.publishDirLabel': 'Folder name (e.g. dist, public)',
+  'apps.publishDirHelp': 'The folder inside the ZIP that holds the files to publish. Leave empty to publish the whole ZIP.',
   'apps.save': 'Save',
   'apps.saved': 'Saved.',
   'apps.notFound': 'App not found.',

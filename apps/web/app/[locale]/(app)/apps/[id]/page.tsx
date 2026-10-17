@@ -172,7 +172,8 @@ export default function AppPage() {
 
       {app.kind !== 'dynamic' && <h2>{t('apps.publishDir')}</h2>}
       {app.kind !== 'dynamic' && <form className="box" onSubmit={(e) => void savePublishDir(e)}>
-        <label htmlFor="pd">{t('apps.publishDir')}</label>
+        <p className="muted">{t('apps.publishDirHelp')}</p>
+        <label htmlFor="pd">{t('apps.publishDirLabel')}</label>
         <input id="pd" value={publishDir} maxLength={200} onChange={(e) => setPublishDir(e.target.value)} />
         <button type="submit">{t('apps.save')}</button>
         {savedDir && <span role="status">{t('apps.saved')}</span>}
