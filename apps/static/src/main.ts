@@ -50,7 +50,15 @@ server.on('upgrade', (req, socket, head) => app.handleUpgrade(req, socket, head)
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
     // Flush access logs only after the server has fully closed so in-flight requests are recorded.
-    const closed = new Promise<void>((resolve) => { server.close(() => resolve()); });
+    // Keep-alive sockets and proxied WebSockets would hold close() open forever, so give in-flight requests 10s.
+    const closed = new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      if ('closeIdleConnections' in server) server.closeIdleConnections();
+      setTimeout(() => {
+        if ('closeAllConnections' in server) server.closeAllConnections();
+        resolve();
+      }, 10_000).unref();
+    });
     void closed.then(() => Promise.all([meter.stop(), accessLog.stop()])).finally(() => {
       void locker?.close();
       storage.close();
