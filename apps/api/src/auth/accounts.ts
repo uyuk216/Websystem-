@@ -20,7 +20,7 @@ export interface RegisterConfig {
  */
 export async function registerAccount(
   db: Db,
-  input: { challengeId: string; code: string; email: string; requesterDeviceId: string; displayName: string; birthDate: string; locale: Locale },
+  input: { challengeId: string; code: string; by?: 'code' | 'link'; email: string; requesterDeviceId: string; displayName: string; birthDate: string; locale: Locale },
   cfg: RegisterConfig,
 ): Promise<{ accountId: string; recoveryCode: string } | { error: 'under13' | 'invalid' | 'exists' }> {
   const age = checkAge(input.birthDate, new Date());
@@ -32,7 +32,7 @@ export async function registerAccount(
   const recoveryCodeHash = await hashRecoveryCode(recoveryCode);
 
   return withSystem(db, async (tx) => {
-    const r = await consumeChallenge(tx, input.challengeId, input.code, 'signup', input.requesterDeviceId);
+    const r = await consumeChallenge(tx, input.challengeId, input.code, 'signup', input.requesterDeviceId, input.by ?? 'code');
     if ('error' in r) return { error: 'invalid' as const };
     if (r.emailHash !== emailHash) return { error: 'invalid' as const };
     const [dup] = await tx.select({ id: accounts.id }).from(accounts).where(eq(accounts.emailHash, emailHash));

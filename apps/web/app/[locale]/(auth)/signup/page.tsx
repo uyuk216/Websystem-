@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
@@ -7,6 +7,19 @@ import { errorKey, useI18n } from '@/lib/i18n';
 import { registerPasskey } from '@/lib/passkey';
 
 type Step = 'email' | 'code' | 'profile' | 'recovery' | 'passkey';
+
+/** Remembers the email between "send code" and opening the mailed link in another tab (this browser only). */
+const PENDING_KEY = 'ys.signupPending';
+interface Pending { challengeId: string; email: string }
+function readPending(): Pending | null {
+  try {
+    const p = JSON.parse(localStorage.getItem(PENDING_KEY) ?? 'null') as Pending | null;
+    return p && typeof p.challengeId === 'string' && typeof p.email === 'string' ? p : null;
+  } catch { return null; }
+}
+function clearPending() {
+  try { localStorage.removeItem(PENDING_KEY); } catch { /* storage unavailable */ }
+}
 
 export default function SignupPage() {
   const { t, locale } = useI18n();
@@ -23,7 +36,26 @@ export default function SignupPage() {
   const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [linkToken, setLinkToken] = useState('');
   const home = `/${locale}/settings/devices`;
+
+  // Opened from the mailed link (?c=&t=): continue at the profile step if this browser started the signup.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const c = q.get('c');
+    const tok = q.get('t');
+    if (!c || !tok) return;
+    window.history.replaceState(null, '', window.location.pathname); // keep the token out of the history
+    const p = readPending();
+    if (p?.challengeId === c) {
+      setEmail(p.email);
+      setChallengeId(c);
+      setLinkToken(tok);
+      setStep('profile');
+    } else {
+      setError(t('signup.linkOtherBrowser'));
+    }
+  }, [t]);
 
   async function start(e: React.FormEvent) {
     e.preventDefault();
@@ -31,6 +63,7 @@ export default function SignupPage() {
     try {
       const r = await api<{ challengeId: string }>('/auth/email/start', { method: 'POST', body: { email, purpose: 'signup', locale }, noRedirect: true });
       setChallengeId(r.challengeId);
+      try { localStorage.setItem(PENDING_KEY, JSON.stringify({ challengeId: r.challengeId, email })); } catch { /* the code still works */ }
       setStep('code');
     } catch (err) { setError(t(err instanceof ApiError ? errorKey(err.code) : 'common.error')); }
   }
@@ -39,13 +72,18 @@ export default function SignupPage() {
     e.preventDefault();
     setError(null);
     try {
-      const r = await api<{ recoveryCode: string }>('/auth/signup', { method: 'POST', body: { challengeId, code, email, displayName, birthDate, locale: lang }, noRedirect: true });
+      const r = await api<{ recoveryCode: string }>('/auth/signup', { method: 'POST', body: { challengeId, ...(linkToken ? { linkToken } : { code }), email, displayName, birthDate, locale: lang }, noRedirect: true });
+      clearPending();
       setRecoveryCode(r.recoveryCode);
       setStep('recovery');
     } catch (err) {
       const c = err instanceof ApiError ? err.code : '';
       setError(c === 'under13' ? t('age.under13') : c === 'exists' ? t('signup.exists') : c === 'invalid' ? t('login.codeWrong') : t(err instanceof ApiError ? errorKey(c) : 'common.error'));
-      if (c === 'invalid') setStep('code');
+      if (c === 'invalid') {
+        // A used or expired link cannot be retried; fall back to typing the code.
+        setLinkToken('');
+        setStep('code');
+      }
     }
   }
 

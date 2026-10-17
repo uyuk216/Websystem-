@@ -68,9 +68,10 @@ export async function startEmailChallenge(
     const body = t(input.locale, 'login.existsBody', { origin: cfg.appOrigin });
     send = () => mailer.sendMail(email, subject, body);
   } else if (input.purpose === 'signup') {
-    // No link: signing up continues on the screen that asked for the code (the link only logs in).
+    // The link continues the signup in the same browser (it must still match the device that started it).
+    const link = `${cfg.appOrigin}/${input.locale}/signup?c=${challengeId}&t=${token}`;
     const subject = t(input.locale, 'login.mailSubject');
-    const body = t(input.locale, 'signup.mailBody', { code });
+    const body = t(input.locale, 'signup.mailBody', { code, link });
     send = () => mailer.sendMail(email, subject, body);
   } else if (account) {
     const link = `${cfg.appOrigin}/login/link?c=${challengeId}&t=${token}`;
@@ -92,13 +93,15 @@ export async function consumeChallenge(
   code: string,
   purpose: 'login' | 'signup',
   requesterDeviceId: string | null,
+  /** 'link': `code` is the mailed link token (signup by link) instead of the 6-digit code. */
+  by: 'code' | 'link' = 'code',
 ): Promise<ChallengeCheck> {
   const [c] = await tx.select().from(emailChallenges).where(eq(emailChallenges.id, challengeId)).for('update');
   if (!c || c.consumedAt || c.purpose !== purpose || c.crossDeviceState === 'failed') return { error: 'invalid' };
   if (requesterDeviceId !== null && c.requesterDeviceId !== requesterDeviceId) return { error: 'invalid' };
   if (c.attempts >= CHALLENGE_MAX_ATTEMPTS) return { error: 'locked' };
   if (c.expiresAt.getTime() <= Date.now()) return { error: 'expired' };
-  if (!hashesEqual(c.codeHash, sha256Hex(code))) {
+  if (!hashesEqual(by === 'link' ? c.linkTokenHash : c.codeHash, sha256Hex(code))) {
     await tx.update(emailChallenges).set({ attempts: c.attempts + 1 }).where(eq(emailChallenges.id, c.id));
     return { error: 'invalid' };
   }

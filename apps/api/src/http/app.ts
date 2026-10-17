@@ -186,11 +186,13 @@ export function createApp(deps?: AppDeps): Hono {
     });
     app.post('/auth/signup', attemptLimit, async (c) => {
       const b = await c.req.json().catch(() => null) as Record<string, unknown> | null;
-      if (!str(b?.challengeId, 64) || !str(b.code, 16) || !str(b.email, 320) || !str(b.displayName, 100) || !str(b.birthDate, 10)) {
+      // Either the 6-digit code or the mailed link token proves the email.
+      const byLink = str(b?.linkToken, 200);
+      if (!str(b?.challengeId, 64) || !(byLink || str(b.code, 16)) || !str(b.email, 320) || !str(b.displayName, 100) || !str(b.birthDate, 10)) {
         return c.json({ error: 'invalid' }, 400);
       }
       const r = await registerAccount(deps.db, {
-        challengeId: b.challengeId, code: b.code, email: b.email, requesterDeviceId: c.get('deviceId'), displayName: b.displayName.trim(), birthDate: b.birthDate, locale: asLocale(b.locale),
+        challengeId: b.challengeId, code: byLink ? b.linkToken as string : b.code as string, by: byLink ? 'link' : 'code', email: b.email, requesterDeviceId: c.get('deviceId'), displayName: b.displayName.trim(), birthDate: b.birthDate, locale: asLocale(b.locale),
       }, deps.config);
       if ('error' in r) return c.json({ error: r.error }, r.error === 'exists' ? 409 : 400);
       const s = await createSession(deps.db, r.accountId, deviceLabel(c));

@@ -85,8 +85,8 @@ describe('signup', () => {
       const mail = createFakeMailer();
       const r = await start(db, mail, 'new@example.com', 'signup');
       if (!('challengeId' in r)) throw new Error('rate');
-      // A signup mail carries only the code: the login link cannot complete a signup, so it must not be offered.
-      expect(mail.lastLinkToken()).toBe('');
+      // The signup mail links back to the signup page (not the login-only link page).
+      expect(mail.lastBodyTo('new@example.com')).toContain('/ja/signup?c=');
       expect(mail.lastBodyTo('new@example.com')).not.toContain('/login/link');
       const s = { ...base, requesterDeviceId: 'd1', email: 'new@example.com', challengeId: r.challengeId, code: mail.lastCode() };
       expect(await registerAccount(db, { ...s, birthDate: '2015-01-01' }, cfg)).toEqual({ error: 'under13' });
@@ -96,6 +96,22 @@ describe('signup', () => {
       expect(ok).toHaveProperty('recoveryCode');
       expect(JSON.stringify(await db.select().from(accounts))).not.toContain('2008-04-02');
       expect(await registerAccount(db, { ...s, birthDate: '2008-04-02' }, cfg)).toEqual({ error: 'invalid' }); // consumed
+    });
+  });
+
+  it('signs up with the mailed link token instead of the code, only on the starting device', async () => {
+    await withTestDb(async (db) => {
+      const mail = createFakeMailer();
+      const r = await start(db, mail, 'link@example.com', 'signup');
+      if (!('challengeId' in r)) throw new Error('rate');
+      const s = { ...base, requesterDeviceId: 'd1', email: 'link@example.com', challengeId: r.challengeId, birthDate: '2008-04-02', by: 'link' as const };
+      const token = mail.lastLinkToken();
+      expect(token).not.toBe('');
+      expect(await registerAccount(db, { ...s, code: 'wrong-token' }, cfg)).toEqual({ error: 'invalid' });
+      expect(await registerAccount(db, { ...s, code: mail.lastCode() }, cfg)).toEqual({ error: 'invalid' }); // the code is not a link token
+      expect(await registerAccount(db, { ...s, requesterDeviceId: 'other', code: token }, cfg)).toEqual({ error: 'invalid' });
+      expect(await registerAccount(db, { ...s, code: token }, cfg)).toHaveProperty('recoveryCode');
+      expect(await registerAccount(db, { ...s, code: token }, cfg)).toEqual({ error: 'invalid' }); // single use
     });
   });
 
