@@ -173,7 +173,10 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
     } catch (e) {
       const why = e as ProxyFailure;
       if (abort.signal.aborted) return new Response(null, { status: 499 });
-      if (why === 'too_large') return c.text('Payload Too Large', 413, { Connection: 'close' });
+      if (why === 'too_large') {
+        discardBody(incoming);
+        return c.text('Payload Too Large', 413);
+      }
       if (why === 'timeout') return c.text('Gateway Timeout', 504);
       deps.dynamic.waker.invalidate(site.appId);
       return c.text('Bad Gateway', 502);
@@ -287,4 +290,17 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
     return (await send('404.html', 404)) ?? c.html(page('404', 'Not Found', 'en'), 404, headers());
   });
   return app;
+}
+
+/**
+ * Reads and drops the rest of a rejected request body. A client still uploading would otherwise fill the TCP
+ * buffers and never read the 413. Past a cap the connection is cut instead of reading forever.
+ */
+function discardBody(incoming: IncomingMessage, cap = 64 * 1024 * 1024): void {
+  let seen = 0;
+  incoming.on('data', (chunk: Buffer) => {
+    seen += chunk.length;
+    if (seen > cap) incoming.socket.destroy();
+  });
+  incoming.resume();
 }
