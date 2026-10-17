@@ -7,12 +7,18 @@ export function namespaceFor(ownerId: string): string {
   return `ys-o-${ownerId.replace(/-/g, '').toLowerCase()}`;
 }
 
-/** Pure manifest builder; applying them is the Kubernetes driver (Task 8). */
+export function workloadName(appId: string, deploymentId: string): string {
+  assertUuid(appId, 'appId');
+  assertUuid(deploymentId, 'deploymentId');
+  return `ys-app-${appId}-${deploymentId.slice(0, 8)}`;
+}
+
+/** Pure manifest builder; applied by KubernetesDriver. */
 export function buildKubernetesManifests(spec: AppRunSpec): object[] {
-  assertUuid(spec.appId, 'appId');
   const ns = namespaceFor(spec.ownerId);
-  const name = `ys-app-${spec.appId}`;
-  const labels = { 'ys.app': spec.appId };
+  const name = workloadName(spec.appId, spec.deploymentId);
+  // One Deployment/Service per deployment so a new version can pass its health check before the switch.
+  const labels = { 'ys.app': spec.appId, 'ys.deployment': spec.deploymentId };
   const mem = `${spec.limits.memoryMb}Mi`;
   const cpu = String(spec.limits.cpu);
   const env = Object.entries({ ...spec.env, PORT: String(spec.port) }).map(([k, v]) => ({ name: k, value: v }));
