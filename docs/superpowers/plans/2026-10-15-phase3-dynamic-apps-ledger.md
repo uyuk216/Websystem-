@@ -27,3 +27,6 @@ Task 7: reviewed (no Critical); Important fixed in 6d62512 (access logs need dep
 Remaining: Task 8, Phase 3 final review.
 Task 8 (web part): implemented WITHOUT review — restart API + dynamic app UI (env vars, logs, access logs, usage, restart). Status shown is "live/not deployed" (no live container status endpoint). e2e requires APP_ENV_KEY.
 Remaining: Task 8 Kubernetes driver + CI + docs; reviews of T7 fix and T8 web; Phase 3 final review.
+Task 8 (k8s part): KubernetesDriver (server-side apply via @kubernetes/client-node, KubeApi seam mocked in tests), per-deployment Deployment/Service names, RUNTIME_DRIVER=docker|kubernetes, docs — commits 1346d72..49c3b90, WITHOUT review. Not run against a real cluster (no gvisor RuntimeClass, edge must run in ys-system, dev images not visible to k3d).
+Note: quay.io/minio anonymous pull returned 401 on the Mac (2026-10-17); dev-up works with MINIO_IMAGE=chainguard/minio. CI still uses quay.io.
+Remaining: reviews of T7 fix, T8 web, T8 k8s; Phase 3 final review; E2E upload→wake on Mac.
