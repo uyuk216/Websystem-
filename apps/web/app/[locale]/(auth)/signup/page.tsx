@@ -19,6 +19,7 @@ export default function SignupPage() {
   const [birthDate, setBirthDate] = useState('');
   const [lang, setLang] = useState<'ja' | 'en'>(locale);
   const [recoveryCode, setRecoveryCode] = useState('');
+  const [downloaded, setDownloaded] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +47,30 @@ export default function SignupPage() {
       setError(c === 'under13' ? t('age.under13') : c === 'exists' ? t('signup.exists') : c === 'invalid' ? t('login.codeWrong') : t(err instanceof ApiError ? errorKey(c) : 'common.error'));
       if (c === 'invalid') setStep('code');
     }
+  }
+
+  /** Builds the .txt in the browser only; the code is never sent anywhere. */
+  function download() {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const file = `recovery-code-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}.txt`;
+    const text = [
+      `${t('app.name')}${t('signup.recoveryFileIntro')}`,
+      '',
+      recoveryCode,
+      '',
+      `${t('signup.recoveryFileCreated')}: ${now.toLocaleString(locale)}`,
+      t('signup.recoveryFileHow'),
+      t('signup.recoveryFileKeep'),
+      '',
+    ].join('\r\n');
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setDownloaded(file);
   }
 
   async function copy() {
@@ -103,18 +128,30 @@ export default function SignupPage() {
         </form>
       )}
       {step === 'recovery' && (
-        <section>
+        <section className="recovery-card">
           <h2>{t('signup.recoveryTitle')}</h2>
-          <p>{t('signup.recoveryWarn')}</p>
-          <code className="recovery" data-testid="recovery-code">{recoveryCode}</code>
-          <button type="button" className="secondary" onClick={() => void copy()}>{copied ? t('signup.copied') : t('signup.copy')}</button>
-          <button type="button" className="secondary" onClick={() => window.print()}>{t('signup.print')}</button>
-          <p>
-            <label className="noprint">
-              <input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
-              {t('signup.saved')}
-            </label>
-          </p>
+          <p>{t('signup.recoveryLead')}</p>
+          <p className="notice" role="note"><strong>{t('signup.recoveryWarn')}</strong></p>
+          <p className="recovery-label" id="rc-label">{t('signup.recoveryLabel')}</p>
+          <code className="recovery" data-testid="recovery-code" aria-labelledby="rc-label">{recoveryCode}</code>
+          <div className="actions noprint">
+            <button type="button" onClick={download}>{t('signup.download')} (.txt)</button>
+            <button type="button" className="secondary" onClick={() => void copy()}>{copied ? t('signup.copied') : t('signup.copy')}</button>
+            <button type="button" className="secondary" onClick={() => window.print()}>{t('signup.print')}</button>
+          </div>
+          <p role="status" className="ok noprint">{downloaded ? `✓ ${t('signup.downloaded', { file: downloaded })}` : ''}</p>
+          <div className="tips noprint">
+            <h3>{t('signup.recoveryTipsTitle')}</h3>
+            <ul>
+              <li>{t('signup.recoveryTip1')}</li>
+              <li>{t('signup.recoveryTip2')}</li>
+              <li>{t('signup.recoveryTip3')}</li>
+            </ul>
+          </div>
+          <label className="confirm noprint">
+            <input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
+            {t('signup.saved')}
+          </label>
           <button type="button" disabled={!saved} onClick={() => { setRecoveryCode(''); setStep('passkey'); }}>{t('common.next')}</button>
         </section>
       )}
