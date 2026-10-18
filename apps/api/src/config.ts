@@ -13,6 +13,8 @@ export interface Config {
   trustedProxyHops: number;
   /** Dev/e2e only: lower archive size limit in bytes (UPLOAD_MAX_BYTES). Unset = the plan limit. */
   uploadMaxBytes?: number;
+  /** Sign-in/sign-up mails per client IP per 10 minutes (AUTH_START_LIMIT, default 20; raised only for E2E). */
+  authStartLimit?: number;
   /** GitHub App settings; present only when all three GITHUB_* variables are set. */
   github?: { appId: string; privateKey: string; webhookSecret: string; clientId: string; clientSecret: string };
 }
@@ -63,6 +65,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     port: parsePort(env.PORT),
     trustedProxyHops: parseHops(env.TRUSTED_PROXY_HOPS),
     uploadMaxBytes: env.UPLOAD_MAX_BYTES && /^\d+$/.test(env.UPLOAD_MAX_BYTES) ? Number(env.UPLOAD_MAX_BYTES) : undefined,
+    authStartLimit: env.AUTH_START_LIMIT && /^\d+$/.test(env.AUTH_START_LIMIT) ? Number(env.AUTH_START_LIMIT) : undefined,
     github: loadGithub(env),
   };
 }

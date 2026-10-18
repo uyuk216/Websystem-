@@ -22,6 +22,8 @@ export default defineConfig({
         // Small upload limit so the 413 UI is testable; dummy GitHub App so PATCH /apps/:id/github exists
         // (GitHub itself is never called: an unlinked installation is rejected with 403 first).
         UPLOAD_MAX_BYTES: '100000',
+        // Every test signs up from 127.0.0.1; the per-IP mail limit (20 per 10 minutes) would cut the suite off.
+        AUTH_START_LIMIT: '500',
         GITHUB_APP_ID: '1', GITHUB_APP_PRIVATE_KEY: 'dummy', GITHUB_WEBHOOK_SECRET: 'e2e-secret',
         GITHUB_CLIENT_ID: 'e2e', GITHUB_CLIENT_SECRET: 'e2e',
       },

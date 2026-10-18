@@ -84,7 +84,9 @@ export async function addDatabase(db: Db, rt: DatabaseRuntime | undefined, accou
     await withSystem(db, (tx) => tx.update(appDatabases).set({ status: 'failed' }).where(eq(appDatabases.appId, appId)));
     return { error: 'failed' };
   }
-  await withSystem(db, (tx) => tx.update(appDatabases).set({ status: 'ready' }).where(eq(appDatabases.appId, appId)));
+  // Measure right away so the screen shows real usage before the first periodic check.
+  const sizeBytes = await rt.databases.sizeBytes(appId, database).catch(() => 0);
+  await withSystem(db, (tx) => tx.update(appDatabases).set({ status: 'ready', sizeBytes, checkedAt: new Date() }).where(eq(appDatabases.appId, appId)));
   return { ok: true };
 }
 

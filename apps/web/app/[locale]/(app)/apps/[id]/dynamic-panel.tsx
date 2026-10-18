@@ -23,6 +23,7 @@ export function DynamicPanel({ id, active, statusLabel }: { id: string; active: 
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [failLogs, setFailLogs] = useState<string[]>([]);
+  const [showAllAccess, setShowAllAccess] = useState(false);
   const [restarting, setRestarting] = useState(false);
 
   const fail = useCallback((err: unknown) => setError(t(err instanceof ApiError ? errorKey(err.code) : 'common.error')), [t]);
@@ -115,12 +116,15 @@ export function DynamicPanel({ id, active, statusLabel }: { id: string; active: 
           <table>
             <thead><tr><th scope="col">{t('dyn.access.time')}</th><th scope="col">{t('dyn.access.method')}</th><th scope="col">{t('dyn.access.path')}</th><th scope="col">{t('dyn.access.status')}</th><th scope="col">{t('dyn.access.bytes')}</th></tr></thead>
             <tbody>
-              {access.map((a, i) => (
+              {(showAllAccess ? access : access.slice(0, 20)).map((a, i) => (
                 <tr key={i}><td>{new Date(a.at).toLocaleString(locale)}</td><td>{a.method}</td><td>{a.path}</td><td>{a.status}</td><td>{a.bytes}</td></tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+      {access && access.length > 20 && !showAllAccess && (
+        <button type="button" className="secondary" onClick={() => setShowAllAccess(true)}>{t('dyn.access.more', { n: access.length - 20 })}</button>
       )}
     </section>
   );

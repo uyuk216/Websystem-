@@ -6,6 +6,7 @@ import { errorKey, useI18n } from '@/lib/i18n';
 import { siteUrl } from '@/lib/site';
 import type { MessageKey } from 'i18n';
 import { DynamicPanel } from './dynamic-panel';
+import { DatabasePanel } from './database-panel';
 
 interface AppInfo { id: string; name: string; kind: 'static' | 'dynamic'; publishDir: string; activeDeploymentId: string | null; githubRepo: string | null; githubBranch: string | null }
 interface Finding { path: string; line: number; rule: string }
@@ -122,6 +123,7 @@ export default function AppPage() {
       {error && <p role="alert" className="error">{error}</p>}
       <p>{t('apps.siteUrl')}: <a href={url} data-testid="site-url" target="_blank" rel="noreferrer">{url}</a></p>
       {app.kind === 'dynamic' && <DynamicPanel id={app.id} active={app.activeDeploymentId !== null} statusLabel={t(app.activeDeploymentId ? 'deploy.status.live' : 'dyn.status.none')} />}
+      {app.kind === 'dynamic' && <DatabasePanel id={app.id} />}
       {app.kind !== 'dynamic' && usage && <p className="muted">{t('apps.usage')}: {(usage.bytes / 1048576).toFixed(1)} / {(usage.limitBytes / 1048576).toFixed(0)} MB</p>}
 
       <h2>{t('deploy.upload')}</h2>

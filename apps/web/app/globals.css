@@ -71,6 +71,9 @@ ul.rows li { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; align-items: 
 ul.rows li:first-child { border-top: 0; }
 ul.rows li a { font-weight: 600; }
 
+progress { display: block; width: 100%; max-width: 26rem; height: 0.6rem; margin: 0.25rem 0 0.75rem; accent-color: var(--accent); }
+progress.warn { accent-color: var(--danger); }
+
 /* Tables */
 .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 table { width: 100%; border-collapse: collapse; }

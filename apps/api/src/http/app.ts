@@ -49,7 +49,7 @@ const deviceLabel = (c: Context): string => coarseDeviceLabel(c.req.header('user
 export interface AppDeps {
   db: Db;
   mailer: Mailer;
-  config: RecoveryRequestConfig & { emailEncKey: Buffer; appEnvKey?: Buffer; appOrigin: string; rpId: string };
+  config: RecoveryRequestConfig & { emailEncKey: Buffer; appEnvKey?: Buffer; appOrigin: string; rpId: string; authStartLimit?: number };
   trustedProxyHops?: number;
   /** Object storage and job queue; deployment routes and storage cleanup are enabled when both are given. */
   storage?: Storage;
@@ -121,7 +121,7 @@ export function createApp(deps?: AppDeps): Hono {
       // The request ID is intentionally not returned: the user only learns that the request was received.
       return c.json({ ok: true });
     });
-    const startLimit = rateLimit(clientIp, 20, 600);
+    const startLimit = rateLimit(clientIp, deps.config.authStartLimit ?? 20, 600);
     const attemptLimit = rateLimit(clientIp, 60, 600);
     app.post('/auth/email/start', startLimit, async (c) => {
       const b = await c.req.json().catch(() => null) as Record<string, unknown> | null;
