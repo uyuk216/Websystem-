@@ -78,7 +78,7 @@ const echoBackend = () => createServer((req, res) => {
   });
 });
 
-async function edge(db: TestDb, fd: ReturnType<typeof fakeDriver>, o: { limit?: number; timeoutMs?: number; withLock?: boolean; touchMs?: number; maxWakes?: number; blockedUntil?: (ownerId: string) => Promise<Date | null> } = {}) {
+async function edge(db: TestDb, fd: ReturnType<typeof fakeDriver>, o: { limit?: number; timeoutMs?: number; withLock?: boolean; touchMs?: number; maxWakes?: number; blockedUntil?: (ownerId: string) => Promise<Date | null>; accessLog?: { record: (e: { path: string; status: number; bytes: number }) => void } } = {}) {
   const meter = createTransferMeter({ db, limitBytes: o.limit ?? 10_000_000, limitCacheMs: 0 });
   const waker = new Waker({
     driver: fd.driver,
@@ -89,7 +89,7 @@ async function edge(db: TestDb, fd: ReturnType<typeof fakeDriver>, o: { limit?: 
     ...(o.withLock ? { withLock: (await openLocker(db)).lock } : {}),
   });
   const touches: string[] = [];
-  const app = createStaticApp({ db, storage: { get: async () => null }, meter, baseDomain: 'localhost', siteCacheMs: 0,
+  const app = createStaticApp({ db, storage: { get: async () => null }, meter, baseDomain: 'localhost', siteCacheMs: 0, ...(o.accessLog ? { accessLog: o.accessLog } : {}),
     dynamic: { waker, touch: async (id) => { touches.push(id); }, touchIntervalMs: o.touchMs ?? 60_000, ...(o.blockedUntil ? { blockedUntil: o.blockedUntil } : {}) } });
   const server = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' });
   server.on('upgrade', (req, socket, head) => app.handleUpgrade(req, socket, head));
@@ -221,6 +221,39 @@ describe('edge proxy for dynamic apps', () => {
     expect(got.head.headers['x-proto']).toBe('chat');
     expect(got.head.headers['x-fwd']).toBe('127.0.0.1');
     expect(got.data).toBe('echo:ping');
+  }));
+
+  it('access log: counts streamed (chunked) response bytes and records a WebSocket tunnel as 101 with its bytes', () => withTestDb(async (db) => {
+    await dynamicApp(db);
+    let appSideClosed = false;
+    const fd = fakeDriver(() => {
+      const s = createServer((_q, r) => { r.write('a'.repeat(1000)); setTimeout(() => r.end('b'.repeat(500)), 20); }); // no Content-Length
+      s.on('upgrade', (_req: IncomingMessage, sock: Socket) => {
+        // The app never closes on its own: the edge must end the tunnel (the app sees end/close).
+        sock.on('end', () => { appSideClosed = true; });
+        sock.on('close', () => { appSideClosed = true; });
+        sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n');
+        sock.on('data', (d: Buffer) => sock.write(`echo:${d.toString()}`));
+      });
+      return s;
+    });
+    const entries: Array<{ path: string; status: number; bytes: number }> = [];
+    const e = await edge(db, fd, { accessLog: { record: (x) => { entries.push(x); } } });
+    const r = await fetch(`${e.base}/stream?x=1`, { headers: H });
+    expect((await r.text()).length).toBe(1500);
+    await expect.poll(() => entries.find((x) => x.path === '/stream')).toMatchObject({ status: 200, bytes: 1500 });
+    await new Promise<void>((resolve, reject) => {
+      const req = httpRequest(`${e.base}/socket?token=secret`, { headers: { ...H, connection: 'Upgrade', upgrade: 'websocket' } });
+      req.on('upgrade', (_res, sock) => {
+        sock.write('ping');
+        sock.once('data', () => { sock.destroy(); resolve(); });
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    await expect.poll(() => entries.find((x) => x.path === '/socket')).toMatchObject({ status: 101 });
+    expect(entries.find((x) => x.path === '/socket')!.bytes).toBeGreaterThan(0);
+    await expect.poll(() => appSideClosed).toBe(true); // no half-open tunnel keeping the app awake
   }));
 
   it('refuses upgrades for static/unknown apps with 404', () => withTestDb(async (db) => {

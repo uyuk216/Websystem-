@@ -48,3 +48,4 @@ NEXT: (1) docs for k3d-gvisor.sh; (2) run the edge (apps/static) inside the clus
 - Accepted/known: in k3d the L4 load balancer hides the Mac's IP (production must preserve source at the LB, phase 8); registry has no GC of old images; worker/API still run outside the cluster (in-cluster BuildKit is phase 8).
 - Checks: lint, typecheck, all unit/integration tests (platform 117, api 184, static 34, …) and E2E 17/17 green.
 Phase 3: complete.
+2026-10-18: fixed open T7 minors — streamed (no Content-Length) responses now log the bytes actually sent; WebSocket tunnels are logged as 101 with relayed bytes on close. Found while testing: a client closing a WebSocket left the tunnel half-open if the app did not close, keeping the app awake (keep-alive touch) indefinitely → the edge now ends both sides when either side ends. Remaining T7 minor: path segments may contain tokens (query strings are already dropped).

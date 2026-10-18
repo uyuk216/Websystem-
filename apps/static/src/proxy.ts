@@ -236,6 +236,10 @@ export function proxyUpgrade(
       if (head.length) socket.unshift(head); // client bytes that arrived with the handshake
       upSocket.pipe(socket);
       socket.pipe(upSocket);
+      // When either side finishes, end the tunnel: a half-open socket would keep the app awake (and the
+      // access log entry pending) for as long as the other side chose not to close.
+      socket.on('end', () => { upSocket.destroy(); socket.destroy(); });
+      upSocket.on('end', () => { socket.destroy(); upSocket.destroy(); });
       resolve(true);
     });
     upstream.end();

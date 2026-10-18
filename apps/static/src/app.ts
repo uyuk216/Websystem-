@@ -193,16 +193,37 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
     // First thing, before any await: a client reset while the app is starting must not be an uncaught 'error'.
     let closed = false;
     let keepAlive: NodeJS.Timeout | undefined;
-    const cleanup = () => { closed = true; clearInterval(keepAlive); };
+    // Access log for upgrades: one entry when the tunnel closes (101 and the bytes relayed), or the refusal status.
+    let wsAppId: string | null = null;
+    let wsBytes = 0;
+    let wsStatus = 0;
+    const wsLog = () => {
+      if (!wsAppId || !wsStatus || !deps.accessLog) return;
+      const url = req.url ?? '/';
+      const end = url.search(/[?#]/);
+      try {
+        deps.accessLog.record({
+          appId: wsAppId, method: req.method ?? 'GET', path: end === -1 ? url : url.slice(0, end), status: wsStatus, bytes: wsBytes,
+          userAgent: req.headers['user-agent'] ?? null, referrer: req.headers.referer ?? null,
+          ip: clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress, hops),
+        });
+      } catch (e) { console.error('access log failed', e); }
+      wsAppId = null;
+    };
+    const cleanup = () => { closed = true; clearInterval(keepAlive); wsLog(); };
     socket.on('error', cleanup);
     socket.on('close', cleanup);
-    const reply = (status: string) => { if (!closed) socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); };
+    const reply = (status: string) => {
+      if (wsAppId && !wsStatus) wsStatus = Number(status.slice(0, 3));
+      if (!closed) socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+    };
     void (async () => {
       if (String(req.headers.upgrade ?? '').toLowerCase() !== 'websocket') return reply('400 Bad Request');
       const name = resolveSite(req.headers.host ?? '', deps.baseDomain);
       const site = name ? await lookup(name) : null;
       if (closed) return;
       if (!site || site.kind !== 'dynamic') return reply('404 Not Found');
+      wsAppId = site.appId;
       if (await deps.meter.isBlocked(site.appId)) return reply('503 Service Unavailable');
       if (!deps.dynamic) return reply('503 Service Unavailable');
       if (await blockedUntil(site.ownerId)) return reply('503 Service Unavailable');
@@ -214,7 +235,11 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
       // A long-lived connection keeps the app awake; cleared when the socket closes.
       keepAlive = setInterval(() => touch(site.appId), 30_000);
       try {
-        await proxyUpgrade(req, socket, head, { host: woke.host, port: woke.port }, { proto, clientIp: clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress, hops), onBytes: (n) => deps.meter.record(site.appId, n) });
+        const accepted = await proxyUpgrade(req, socket, head, { host: woke.host, port: woke.port }, { proto, clientIp: clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress, hops), onBytes: (n) => { wsBytes += n; deps.meter.record(site.appId, n); } });
+        // An accepted tunnel is logged as 101 when it closes; a refusal from the app is relayed as-is and not logged
+        // (its status line belongs to the app).
+        if (!wsStatus && accepted) wsStatus = 101;
+        if (closed) wsLog();
       } catch (e) {
         if (e !== 'timeout') deps.dynamic.waker.invalidate(site.appId);
         reply(e === 'timeout' ? '504 Gateway Timeout' : '502 Bad Gateway');
@@ -229,11 +254,36 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
     const appId = c.get('logAppId' as never) as string | undefined;
     if (!appId || !deps.accessLog) return;
     try {
+      const log = deps.accessLog;
       const incoming = (c.env as { incoming?: IncomingMessage } | undefined)?.incoming;
-      deps.accessLog.record({
-        appId, method: c.req.method, path: rawPath(c), status: c.res.status, bytes: Number(c.res.headers.get('content-length') ?? 0) || 0,
+      const entry = {
+        appId, method: c.req.method, path: rawPath(c), status: c.res.status,
         userAgent: c.req.header('user-agent'), referrer: c.req.header('referer'), ip: incoming ? clientAddress(incoming.headers['x-forwarded-for'], incoming.socket.remoteAddress, hops) : '',
+      };
+      const declared = c.res.headers.get('content-length');
+      if (declared !== null || !c.res.body) {
+        log.record({ ...entry, bytes: Number(declared ?? 0) || 0 });
+        return;
+      }
+      // No Content-Length (streamed/chunked): count what is actually sent and record when the body ends or is cancelled.
+      let bytes = 0;
+      let done = false;
+      const finish = () => { if (!done) { done = true; log.record({ ...entry, bytes }); } };
+      const counted = c.res.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, ctrl) { bytes += chunk.byteLength; ctrl.enqueue(chunk); },
+        flush() { finish(); },
+      }));
+      const reader = counted.getReader();
+      const body = new ReadableStream<Uint8Array>({
+        async pull(ctrl) {
+          try {
+            const r = await reader.read();
+            if (r.done) { finish(); ctrl.close(); } else ctrl.enqueue(r.value);
+          } catch (e) { finish(); ctrl.error(e); }
+        },
+        cancel(reason) { finish(); return reader.cancel(reason); },
       });
+      c.res = new Response(body, { status: c.res.status, statusText: c.res.statusText, headers: c.res.headers });
     } catch (e) { console.error('access log failed', e); }
   });
   app.all('*', async (c) => {
