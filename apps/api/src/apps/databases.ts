@@ -118,7 +118,7 @@ export async function getRunInputs(db: Db, rt: DatabaseRuntime, appId: string): 
   if (d?.status !== 'ready') return { env, networks: [], secrets: Object.values(env) };
   const password = decryptEnvValue(d.passwordEnc, rt.envKey, appId, SECRET_NAME);
   const { database, user } = databaseNames(appId);
-  const ep = rt.databases.endpoint(appId);
+  const ep = await rt.databases.endpoint(appId);
   const full = { ...env, DATABASE_URL: databaseUrl(ep, database, user, password) };
   // Values to scrub from logs: every env value and the bare password (an app may print either).
   return { env: full, networks: ep.network ? [ep.network] : [], secrets: [...Object.values(full), password] };

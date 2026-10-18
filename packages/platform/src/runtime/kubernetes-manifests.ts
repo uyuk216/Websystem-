@@ -7,6 +7,22 @@ export function namespaceFor(ownerId: string): string {
   return `ys-o-${ownerId.replace(/-/g, '').toLowerCase()}`;
 }
 
+/** The owner's app namespace (also applied by the database driver, which may run before any app has started). */
+export function ownerNamespaceManifest(ownerId: string): object {
+  const ns = namespaceFor(ownerId);
+  return {
+    apiVersion: 'v1', kind: 'Namespace',
+    metadata: {
+      name: ns,
+      labels: {
+        'ys.owner': ns,
+        'pod-security.kubernetes.io/enforce': 'restricted',
+        'pod-security.kubernetes.io/enforce-version': 'latest',
+      },
+    },
+  };
+}
+
 export function workloadName(appId: string, deploymentId: string): string {
   assertUuid(appId, 'appId');
   assertUuid(deploymentId, 'deploymentId');
@@ -30,15 +46,7 @@ export function buildKubernetesManifests(spec: AppRunSpec, opts: ManifestOptions
   const env = Object.entries({ ...spec.env, PORT: String(spec.port) }).map(([k, v]) => ({ name: k, value: v }));
 
   return [
-    { apiVersion: 'v1', kind: 'Namespace', metadata: {
-        name: ns,
-        labels: {
-          'ys.owner': ns,
-          'pod-security.kubernetes.io/enforce': 'restricted',
-          'pod-security.kubernetes.io/enforce-version': 'latest',
-        },
-      },
-    },
+    ownerNamespaceManifest(spec.ownerId),
     {
       apiVersion: 'apps/v1',
       kind: 'Deployment',

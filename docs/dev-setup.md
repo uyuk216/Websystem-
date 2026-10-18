@@ -142,6 +142,19 @@ RUNTIME_DRIVER=kubernetes IMAGE_REGISTRY=localhost:5050 K8S_RUNTIME_CLASS=gvisor
 - k3d では入口（ロードバランサー）で送信元が書き換わるため、アクセスの記録の IP は Mac ではなくクラスタ内の入口のものになります。エッジは `EDGE_TRUSTED_PROXY_HOPS`（k3d では 1）だけ `X-Forwarded-For` を信用します。本番は入口で送信元を保つ設定が必要（フェーズ 8）。
 - ワーカーと API は Mac で動かしています。クラスタ内でのビルド（rootless BuildKit）はフェーズ 8。
 
+## 利用者向けのデータベース
+
+動的アプリの画面の「データベースを追加」で、アプリ専用の PostgreSQL ができ、接続先が `DATABASE_URL` としてアプリに渡ります（同じ名前の設定値より優先）。容量 256MB・接続 10 まで。80% でメール、100% で読み取り専用、110% で接続も止めます。1 時間ごとにバックアップを取り（ストレージの `<appId>/db-backups/`）、7 日間残します。画面から好きなバックアップに戻せます（戻す直前の状態も自動で保存）。
+
+- **Docker ドライバ**（`RUNTIME_DRIVER` が `docker` のとき）：アプリごとに `postgres:16-alpine` のコンテナ `ys-db-<appId>` を、外へ出られない専用ネットワーク `ys-dbnet-*` に作り、アプリのコンテナもそこに参加させます。ホストにポートは公開しません。
+- **Kubernetes ドライバ**：CloudNativePG の `Cluster` を持ち主の DB 用名前空間 `ys-d-<ownerId>` に作り、NetworkPolicy でそのアプリの Pod からだけつながるようにします。`DB_BACKUP_S3_PATH`（例 `s3://user-db-backups`）を設定すると、CloudNativePG の継続バックアップ（7 日保持）も有効になります。
+
+k3d で試すときは、先に CloudNativePG のオペレーターを入れます（2026-10-18 に v1.30.1 で確認：作成約 1 分、アプリからの接続、別アプリからは届かない、読み取り専用、バックアップと復元、削除）。
+
+```bash
+kubectl --context k3d-tenant apply --server-side -f https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v1.30.1/cnpg-1.30.1.yaml
+```
+
 ## 動的アプリのビルド
 
 - 開発・テストではクラシックビルダー（`DOCKER_BUILDKIT=0`）で `docker build` を実行する。ビルド手順のコンテナにメモリ 1GB（スワップ込み）・CPU 1 を適用でき、BuildKit では効かないため。

@@ -2,7 +2,8 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { PassThrough, type Readable } from 'node:stream';
 import { assertUuid } from '../runtime/driver.js';
-import type { DatabaseDriver, DatabaseEndpoint, DatabaseSpec, DatabaseStatus, DatabaseWriteMode } from './driver.js';
+import type { DatabaseDriver, DatabaseEndpoint, DatabaseSpec, DatabaseStatus } from './driver.js';
+import { PostgresAdmin, type ExecResult } from './postgres-admin.js';
 
 export const DB_IMAGE = 'postgres:16-alpine';
 
@@ -16,29 +17,25 @@ export interface DockerDatabaseOptions {
 const containerFor = (appId: string): string => { assertUuid(appId, 'appId'); return `ys-db-${appId}`; };
 /** Internal network shared only by this app's containers and its database (no route out, no other apps). */
 export const databaseNetwork = (appId: string): string => { assertUuid(appId, 'appId'); return `ys-dbnet-${appId.replace(/-/g, '').slice(0, 12)}`; };
-const IDENT = /^[a-z_][a-z0-9_]{0,62}$/;
-const ident = (s: string): string => { if (!IDENT.test(s)) throw new Error(`invalid identifier: ${s}`); return s; };
-const literal = (s: string): string => `'${s.replace(/'/g, "''")}'`;
-
-interface RunResult { code: number | null; out: string; err: string }
 
 /**
  * Development driver: one postgres container per app on an internal per-app network. Administration goes through
  * `docker exec` over the container's local socket; the superuser has a random password nobody keeps, and no port is
  * published on the host.
  */
-export class DockerDatabaseDriver implements DatabaseDriver {
+export class DockerDatabaseDriver extends PostgresAdmin implements DatabaseDriver {
   private readonly bin: string;
   private readonly image: string;
   private readonly readyTimeoutMs: number;
 
   constructor(o: DockerDatabaseOptions = {}) {
+    super();
     this.bin = o.docker ?? 'docker';
     this.image = o.image ?? (process.env.DB_IMAGE || DB_IMAGE);
     this.readyTimeoutMs = o.readyTimeoutMs ?? 60_000;
   }
 
-  private run(args: string[], stdin?: string | Readable): Promise<RunResult> {
+  private run(args: string[], stdin?: string | Readable): Promise<ExecResult> {
     return new Promise((resolve) => {
       const p = spawn(this.bin, args, { stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
       let out = '';
@@ -58,16 +55,24 @@ export class DockerDatabaseDriver implements DatabaseDriver {
     return r.out;
   }
 
-  /** Runs SQL as the superuser over the local socket. `db` defaults to postgres. */
-  private sql(appId: string, sql: string, db = 'postgres'): Promise<string> {
-    return this.must(['exec', '-i', containerFor(appId), 'psql', '-U', 'postgres', '-d', db, '-v', 'ON_ERROR_STOP=1', '-qtA'], 'psql', sql);
+  protected exec(appId: string, cmd: string[], stdin?: string | Readable): Promise<ExecResult> {
+    return this.run(['exec', ...(stdin === undefined ? [] : ['-i']), containerFor(appId), ...cmd], stdin);
+  }
+
+  protected async execStream(appId: string, cmd: string[]): Promise<Readable> {
+    const out = new PassThrough();
+    const p = spawn(this.bin, ['exec', containerFor(appId), ...cmd], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let err = '';
+    p.stderr.on('data', (c: Buffer) => { if (err.length < 4096) err += c.toString(); });
+    p.stdout.pipe(out, { end: false });
+    p.on('error', (e) => out.destroy(e));
+    p.on('close', (code) => { if (code === 0) out.end(); else out.destroy(new Error(`${cmd[0]} failed: ${err.trim()}`)); });
+    return out;
   }
 
   async create(spec: DatabaseSpec): Promise<void> {
     const name = containerFor(spec.appId);
     assertUuid(spec.ownerId, 'ownerId');
-    const db = ident(spec.database);
-    const user = ident(spec.user);
     const net = databaseNetwork(spec.appId);
     const labels = ['--label', `ys.db=${spec.appId}`, '--label', `ys.owner=${spec.ownerId}`];
     if ((await this.run(['network', 'inspect', net])).code !== 0) {
@@ -89,19 +94,7 @@ export class DockerDatabaseDriver implements DatabaseDriver {
       await this.must(['start', name], 'database start');
     }
     await this.waitReady(spec.appId);
-    await this.sql(spec.appId, [
-      `DO $$BEGIN
-        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = ${literal(user)}) THEN
-          CREATE ROLE ${user} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD ${literal(spec.password)} CONNECTION LIMIT ${Math.trunc(spec.limits.connections)};
-        ELSE
-          ALTER ROLE ${user} PASSWORD ${literal(spec.password)} CONNECTION LIMIT ${Math.trunc(spec.limits.connections)};
-        END IF;
-      END$$;`,
-      `SELECT 'CREATE DATABASE ${db} OWNER ${user}' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = ${literal(db)})\\gexec`,
-      `REVOKE ALL ON DATABASE ${db} FROM PUBLIC;`,
-      `GRANT CONNECT, TEMPORARY ON DATABASE ${db} TO ${user};`,
-      '',
-    ].join('\n'));
+    await this.ensureRoleAndDatabase(spec);
   }
 
   private async waitReady(appId: string): Promise<void> {
@@ -137,64 +130,7 @@ export class DockerDatabaseDriver implements DatabaseDriver {
     return s === 'created' || s === 'restarting' ? 'starting' : 'stopped';
   }
 
-  endpoint(appId: string): DatabaseEndpoint {
+  async endpoint(appId: string): Promise<DatabaseEndpoint> {
     return { host: containerFor(appId), port: 5432, network: databaseNetwork(appId) };
-  }
-
-  async sizeBytes(appId: string, database: string): Promise<number> {
-    const out = await this.sql(appId, `SELECT pg_database_size(${literal(ident(database))});`);
-    const n = Number(out.trim());
-    if (!Number.isFinite(n)) throw new Error('unexpected size');
-    return n;
-  }
-
-  async setWriteMode(appId: string, database: string, user: string, mode: DatabaseWriteMode): Promise<void> {
-    const db = ident(database);
-    const u = ident(user);
-    await this.sql(appId, [
-      `ALTER DATABASE ${db} ALLOW_CONNECTIONS ${mode === 'blocked' ? 'false' : 'true'};`,
-      `ALTER DATABASE ${db} SET default_transaction_read_only = ${mode === 'normal' ? 'off' : 'on'};`,
-      // Settings apply to new sessions: close the app's open ones so the mode takes effect now.
-      mode === 'normal' ? '' : `SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE datname = ${literal(db)} AND usename = ${literal(u)};`,
-      '',
-    ].join('\n'));
-  }
-
-  async backup(appId: string, database: string): Promise<Readable> {
-    const db = ident(database);
-    const out = new PassThrough();
-    const p = spawn(this.bin, ['exec', containerFor(appId), 'pg_dump', '-U', 'postgres', '-Fc', '--no-owner', db], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let err = '';
-    p.stderr.on('data', (c: Buffer) => { if (err.length < 4096) err += c.toString(); });
-    p.stdout.pipe(out, { end: false });
-    p.on('error', (e) => out.destroy(e));
-    p.on('close', (code) => { if (code === 0) out.end(); else out.destroy(new Error(`pg_dump failed: ${err.trim()}`)); });
-    return out;
-  }
-
-  async restore(appId: string, database: string, user: string, dump: Readable): Promise<void> {
-    const db = ident(database);
-    const u = ident(user);
-    const tmp = ident(`${db}_restore`);
-    const old = ident(`${db}_old`);
-    await this.sql(appId, `DROP DATABASE IF EXISTS ${tmp};\nCREATE DATABASE ${tmp} OWNER ${u};\n`);
-    const r = await this.run(['exec', '-i', containerFor(appId), 'pg_restore', '-U', 'postgres', '--no-owner', `--role=${u}`, '--exit-on-error', '-d', tmp], dump);
-    if (r.code !== 0) {
-      await this.sql(appId, `DROP DATABASE IF EXISTS ${tmp};\n`).catch(() => undefined);
-      throw new Error(`restore failed: ${r.err.trim()}`);
-    }
-    // Swap: the restored copy takes the name; the previous data is dropped only after the swap succeeded.
-    await this.sql(appId, [
-      `DROP DATABASE IF EXISTS ${old};`,
-      // No new sessions while the old copy is renamed away (the app would otherwise reconnect in between).
-      `ALTER DATABASE ${db} ALLOW_CONNECTIONS false;`,
-      `SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE datname = ${literal(db)};`,
-      `ALTER DATABASE ${db} RENAME TO ${old};`,
-      `ALTER DATABASE ${tmp} RENAME TO ${db};`,
-      `REVOKE ALL ON DATABASE ${db} FROM PUBLIC;`,
-      `GRANT CONNECT, TEMPORARY ON DATABASE ${db} TO ${u};`,
-      `DROP DATABASE ${old} WITH (FORCE);`,
-      '',
-    ].join('\n'));
   }
 }

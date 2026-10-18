@@ -21,7 +21,7 @@ async function makeDb() {
   const { database, user } = databaseNames(appId);
   const password = randomBytes(24).toString('base64url');
   await driver.create({ appId, ownerId, database, user, password, limits: { connections: 10, memoryMb: 256 } });
-  return { appId, database, user, password, url: databaseUrl(driver.endpoint(appId), database, user, password) };
+  return { appId, database, user, password, url: databaseUrl(await driver.endpoint(appId), database, user, password) };
 }
 
 afterAll(async () => { await Promise.all(created.map((id) => driver.remove(id))); }, 120_000);
@@ -35,7 +35,7 @@ describe.skipIf(!available)('DockerDatabaseDriver', { timeout: 180_000 }, () => 
     // App B sits on its own network: A's server does not even resolve there.
     expect(psqlFrom(databaseNetwork(b.appId), a.url, 'SELECT 1').ok).toBe(false);
     // Even with A's network, B's credentials do not open A's database (and vice versa).
-    const crossUrl = databaseUrl(driver.endpoint(a.appId), a.database, b.user, b.password);
+    const crossUrl = databaseUrl(await driver.endpoint(a.appId), a.database, b.user, b.password);
     expect(psqlFrom(databaseNetwork(a.appId), crossUrl, 'SELECT 1').ok).toBe(false);
     const ports = execFileSync('docker', ['inspect', '-f', '{{json .NetworkSettings.Ports}}', `ys-db-${a.appId}`], { encoding: 'utf8' });
     expect(ports).not.toMatch(/HostPort/);

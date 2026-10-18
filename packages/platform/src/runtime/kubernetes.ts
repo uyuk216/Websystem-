@@ -164,14 +164,21 @@ const RESOURCE: Record<string, { base: string; plural: string; namespaced: boole
   NetworkPolicy: { base: '/apis/networking.k8s.io/v1', plural: 'networkpolicies', namespaced: true },
   ResourceQuota: { base: '/api/v1', plural: 'resourcequotas', namespaced: true },
   LimitRange: { base: '/api/v1', plural: 'limitranges', namespaced: true },
+  Secret: { base: '/api/v1', plural: 'secrets', namespaced: true },
+  Cluster: { base: '/apis/postgresql.cnpg.io/v1', plural: 'clusters', namespaced: true },
 };
+
+/** REST path of one object (no query string). */
+export function resourcePath(kind: string, namespace: string | undefined, name: string): string {
+  const r = RESOURCE[kind];
+  if (!r) throw new Error(`unsupported kind: ${kind}`);
+  const ns = r.namespaced ? `/namespaces/${encodeURIComponent(namespace ?? '')}` : '';
+  return `${r.base}${ns}/${r.plural}/${encodeURIComponent(name)}`;
+}
 
 /** URL path for a server-side apply of `obj`. */
 export function applyPath(obj: { kind: string; metadata: { name: string; namespace?: string } }): string {
-  const r = RESOURCE[obj.kind];
-  if (!r) throw new Error(`unsupported kind: ${obj.kind}`);
-  const ns = r.namespaced ? `/namespaces/${encodeURIComponent(obj.metadata.namespace ?? '')}` : '';
-  return `${r.base}${ns}/${r.plural}/${encodeURIComponent(obj.metadata.name)}?fieldManager=${FIELD_MANAGER}&force=true`;
+  return `${resourcePath(obj.kind, obj.metadata.namespace, obj.metadata.name)}?fieldManager=${FIELD_MANAGER}&force=true`;
 }
 
 function isNotFound(err: unknown): boolean {

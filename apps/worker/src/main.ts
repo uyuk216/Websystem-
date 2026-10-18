@@ -13,13 +13,13 @@ const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error('Missing required env var: DATABASE_URL');
 
 // Throws with a clear message when the dynamic runtime is enabled but APP_ENV_KEY is missing.
-const runtime = createDynamicRuntime(process.env);
+const { db, sql } = createDb(databaseUrl);
+const runtime = createDynamicRuntime(process.env, { db });
 const locker = runtime ? createWakeLocker(databaseUrl, 4) : undefined;
 if (runtime && locker) runtime.lock = locker.lock;
 const storage = createStorage(loadStorageConfig(process.env));
 await storage.ensureBuckets();
 const boss = await startQueue(createQueue(databaseUrl));
-const { db, sql } = createDb(databaseUrl);
 await registerHandlers(boss, defaultHandlers({ db, storage, runtime }));
 
 // Stale `queued` deployments (never enqueued, or the enqueuing process died) are failed at startup and every 10 minutes.

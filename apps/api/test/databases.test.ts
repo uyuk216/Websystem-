@@ -47,7 +47,7 @@ describe.skipIf(!available)('user databases', { timeout: 180_000 }, () => {
     expect(row!.passwordEnc).not.toContain(password);
     expect(run.env.DATABASE_URL).not.toBe('postgres://user-set');
     expect(run.secrets).toContain(password);
-    expect(run.networks).toEqual([databases.endpoint(s.appId).network]);
+    expect(run.networks).toEqual([(await databases.endpoint(s.appId)).network]);
 
     // A real app container started the way rollouts start apps reaches the database through DATABASE_URL.
     const driver = new DockerDriver({ warn: () => {} });

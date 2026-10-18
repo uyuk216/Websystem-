@@ -5,7 +5,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createWriteStream } from 'node:fs';
 import { eq, sql } from 'drizzle-orm';
-import { DockerDatabaseDriver, DockerDriver, KubernetesDriver, type DatabaseDriver, buildImage, pushImage, collectLogs, detectStack, extractArchive, removeImage, waitHealthy, type AppRunSpec, type ArchiveFormat, type HealthOptions, type RuntimeDriver, type Storage } from 'platform';
+import { DockerDatabaseDriver, DockerDriver, KubernetesDatabaseDriver, KubernetesDriver, type DatabaseDriver, buildImage, pushImage, collectLogs, detectStack, extractArchive, removeImage, waitHealthy, type AppRunSpec, type ArchiveFormat, type HealthOptions, type RuntimeDriver, type Storage } from 'platform';
 import { DYNAMIC_LIMITS } from 'shared';
 import { withSystem, type Db } from '../db/client.js';
 import { getRunInputs } from '../apps/databases.js';
@@ -72,7 +72,7 @@ export interface DynamicRuntime {
  * Builds the runtime from the process environment. DYNAMIC_RUNTIME=off disables it (undefined); otherwise a
  * Docker driver (or the Kubernetes driver with RUNTIME_DRIVER=kubernetes) is used and APP_ENV_KEY (32 bytes, base64) must be set, or this throws.
  */
-export function createDynamicRuntime(env: NodeJS.ProcessEnv): DynamicRuntime | undefined {
+export function createDynamicRuntime(env: NodeJS.ProcessEnv, opts: { db?: Db } = {}): DynamicRuntime | undefined {
   if (env.DYNAMIC_RUNTIME === 'off') return undefined;
   const raw = env.APP_ENV_KEY;
   if (!raw) throw new Error('APP_ENV_KEY is required when the dynamic runtime is enabled (set DYNAMIC_RUNTIME=off to disable it)');
@@ -83,8 +83,22 @@ export function createDynamicRuntime(env: NodeJS.ProcessEnv): DynamicRuntime | u
   return {
     driver: kind === 'kubernetes' ? new KubernetesDriver() : new DockerDriver(), envKey,
     ...(kind === 'docker' ? { databases: new DockerDatabaseDriver() } : {}),
+    ...(kind === 'kubernetes' && opts.db ? { databases: kubernetesDatabases(env, opts.db) } : {}),
     ...(env.IMAGE_REGISTRY ? { imageRegistry: env.IMAGE_REGISTRY } : {}),
   };
+}
+
+/** CloudNativePG databases; continuous backups go to DB_BACKUP_S3_PATH when it is set. */
+function kubernetesDatabases(env: NodeJS.ProcessEnv, db: Db): DatabaseDriver {
+  const ownerOf = async (appId: string): Promise<string> => {
+    const [a] = await withSystem(db, (tx) => tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId)));
+    if (!a) throw new Error(`unknown app ${appId}`);
+    return a.ownerId;
+  };
+  const backupStore = env.DB_BACKUP_S3_PATH && env.S3_ACCESS_KEY && env.S3_SECRET_KEY
+    ? { destinationPath: env.DB_BACKUP_S3_PATH, accessKeyId: env.S3_ACCESS_KEY, secretAccessKey: env.S3_SECRET_KEY, ...(env.DB_BACKUP_S3_ENDPOINT ? { endpointURL: env.DB_BACKUP_S3_ENDPOINT } : {}) }
+    : undefined;
+  return new KubernetesDatabaseDriver({ ownerOf, ...(backupStore ? { backupStore } : {}) });
 }
 
 export const runLimits = { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids };

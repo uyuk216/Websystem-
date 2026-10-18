@@ -30,7 +30,7 @@ export interface DatabaseDriver {
   /** Removes the server and its data. Idempotent. */
   remove(appId: string): Promise<void>;
   status(appId: string): Promise<DatabaseStatus>;
-  endpoint(appId: string): DatabaseEndpoint;
+  endpoint(appId: string): Promise<DatabaseEndpoint>;
   sizeBytes(appId: string, database: string): Promise<number>;
   setWriteMode(appId: string, database: string, user: string, mode: DatabaseWriteMode): Promise<void>;
   /** A logical backup (pg_dump custom format) as a stream. */

@@ -15,7 +15,7 @@ const mailer = createMailer(config.smtpUrl, config.mailFrom);
 const storage = createStorage(loadStorageConfig(process.env));
 await storage.ensureBuckets();
 const queue = await startQueue(createQueue(config.databaseUrl));
-const runtime = createDynamicRuntime(process.env);
+const runtime = createDynamicRuntime(process.env, { db });
 // Rollbacks start containers under the same per-app wake lock as the worker and the edge (own small pool).
 if (runtime) runtime.lock = createWakeLocker(config.databaseUrl, 4).lock;
 const app = createApp({ db, runtime, mailer, config, trustedProxyHops: config.trustedProxyHops, storage, queue, uploadMaxBytes: config.uploadMaxBytes,

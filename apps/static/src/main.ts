@@ -26,7 +26,7 @@ const accessLog = createAccessLogger(db);
 accessLog.start();
 
 // Dynamic apps: DYNAMIC_RUNTIME=off disables them (503); otherwise APP_ENV_KEY is required to start apps.
-const runtime = createDynamicRuntime(process.env);
+const runtime = createDynamicRuntime(process.env, { db });
 // Wake locks live on their own small pool, apart from the queries made while an app starts.
 const locker = runtime ? createWakeLocker(need('DATABASE_URL'), 8) : undefined;
 const dynamic = runtime && {

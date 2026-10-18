@@ -139,7 +139,7 @@ describe('applyPath', () => {
       `/api/v1/namespaces/${ns}/resourcequotas/ys-owner-quota?fieldManager=ys-runtime&force=true`,
       `/api/v1/namespaces/${ns}/limitranges/ys-owner-limits?fieldManager=ys-runtime&force=true`,
     ]);
-    expect(() => applyPath({ kind: 'Secret', metadata: { name: 'x' } })).toThrow(/unsupported/);
+    expect(() => applyPath({ kind: 'Pod', metadata: { name: 'x' } })).toThrow(/unsupported/);
   });
 });
 
