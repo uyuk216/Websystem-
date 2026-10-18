@@ -21,6 +21,7 @@ import { createApp as createAppRecord, deleteApp, getApp, listApps, listOwners, 
 import { deleteEnvVar, listEnvVars, setEnvVar, type EnvError } from '../apps/env-vars.js';
 import { addDatabase, getDatabase, removeDatabase, type DatabaseError } from '../apps/databases.js';
 import { backupNow, listBackups, restoreBackup } from '../apps/database-backups.js';
+import { startTunnel } from '../apps/database-tunnel.js';
 import { createApiToken, listApiTokens, revokeApiToken } from '../apps/api-tokens.js';
 import { claimDelivery, deployPush, findPushTargets, parsePush, releaseDelivery, verifyWebhook } from '../github/webhook.js';
 import { completeConnect, setGithub, startConnect } from '../github/link.js';
@@ -383,6 +384,10 @@ export function createApp(deps?: AppDeps): Hono {
         });
         app.post('/apps/:id/database/backups', session, async (c) => {
           const r = await backupNow(deps.db, storage, deps.runtime, c.get('accountId'), c.req.param('id'));
+          return 'error' in r ? c.json(r, backupStatus[r.error]) : c.json(r, 201);
+        });
+        app.post('/apps/:id/database/tunnel', session, async (c) => {
+          const r = await startTunnel(deps.db, deps.runtime, c.get('accountId'), c.req.param('id'));
           return 'error' in r ? c.json(r, backupStatus[r.error]) : c.json(r, 201);
         });
         app.post('/apps/:id/database/restore', session, async (c) => {

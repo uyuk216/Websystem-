@@ -149,6 +149,8 @@ RUNTIME_DRIVER=kubernetes IMAGE_REGISTRY=localhost:5050 K8S_RUNTIME_CLASS=gvisor
 - **Docker ドライバ**（`RUNTIME_DRIVER` が `docker` のとき）：アプリごとに `postgres:16-alpine` のコンテナ `ys-db-<appId>` を、外へ出られない専用ネットワーク `ys-dbnet-*` に作り、アプリのコンテナもそこに参加させます。ホストにポートは公開しません。
 - **Kubernetes ドライバ**：CloudNativePG の `Cluster` を持ち主の DB 用名前空間 `ys-d-<ownerId>` に作り、NetworkPolicy でそのアプリの Pod からだけつながるようにします。`DB_BACKUP_S3_PATH`（例 `s3://user-db-backups`）を設定すると、CloudNativePG の継続バックアップ（7 日保持）も有効になります。
 
+外から中身を見るときは CLI の `yourservice db connect --app <名前>` を使います。API が 1 時間だけ有効な一時的なログイン（アプリの役割の権限を引き継ぐ）を発行し、`127.0.0.1:15432` への接続を API 経由で DB へ中継します（Docker ではその DB 専用ネットワークに一時的な中継コンテナを作り、Kubernetes では API のポート転送を使います）。期限切れのログインは容量の見張りが 5 分ごとに削除します。
+
 k3d で試すときは、先に CloudNativePG のオペレーターを入れます（2026-10-18 に v1.30.1 で確認：作成約 1 分、アプリからの接続、別アプリからは届かない、読み取り専用、バックアップと復元、削除）。
 
 ```bash

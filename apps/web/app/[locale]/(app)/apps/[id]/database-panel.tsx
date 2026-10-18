@@ -12,7 +12,7 @@ const mb = (n: number) => (n / 1048576).toFixed(1);
 const size = (n: number) => (n < 1048576 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${mb(n)} MB`);
 
 /** The app's database: add/remove, usage, write protection and backups. Passwords are never shown. */
-export function DatabasePanel({ id }: { id: string }) {
+export function DatabasePanel({ id, name }: { id: string; name: string }) {
   const { t, locale } = useI18n();
   const [db, setDb] = useState<DbView | null | undefined>(undefined);
   const [backups, setBackups] = useState<Backup[]>([]);
@@ -67,6 +67,9 @@ export function DatabasePanel({ id }: { id: string }) {
               <progress id="db-usage" max={100} value={pct} className={pct >= 80 ? 'warn' : undefined}>{pct}%</progress>
               {db.writeMode === 'read_only' && <p className="notice" role="note">{t('db.readOnly')}</p>}
               {db.writeMode === 'blocked' && <p className="notice" role="note">{t('db.blocked')}</p>}
+
+              <h3>{t('db.tunnelTitle')}</h3>
+              <p className="muted">{t('db.tunnelHelp', { app: name })}</p>
 
               <h3>{t('db.backups')}</h3>
               <p className="muted">{t('db.backupsHelp')}</p>

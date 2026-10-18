@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { Readable } from 'node:stream';
 import type { DatabaseSpec, DatabaseWriteMode } from './driver.js';
 
@@ -91,5 +92,35 @@ export abstract class PostgresAdmin {
       `DROP DATABASE ${old} WITH (FORCE);`,
       '',
     ].join('\n'));
+  }
+
+  async createTemporaryLogin(appId: string, database: string, user: string, validUntil: Date): Promise<{ user: string; password: string }> {
+    const db = ident(database);
+    const u = ident(user);
+    const temp = ident(`tun_${randomBytes(6).toString('hex')}`);
+    const password = randomBytes(24).toString('base64url');
+    await this.sql(appId, [
+      `CREATE ROLE ${temp} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT PASSWORD ${literal(password)} VALID UNTIL ${literal(validUntil.toISOString())} CONNECTION LIMIT 3 IN ROLE ${u};`,
+      // Act as the app's role so tables created through the tunnel belong to the app, not to this login.
+      `ALTER ROLE ${temp} SET role = ${literal(u)};`,
+      `GRANT CONNECT, TEMPORARY ON DATABASE ${db} TO ${temp};`,
+      `COMMENT ON ROLE ${temp} IS 'ys temporary tunnel login';`,
+      '',
+    ].join('\n'));
+    return { user: temp, password };
+  }
+
+  async dropExpiredLogins(appId: string): Promise<number> {
+    const out = await this.sql(appId, `SELECT rolname FROM pg_roles WHERE rolname ~ '^tun_[0-9a-f]{12}$' AND rolvaliduntil < now();`);
+    const roles = out.split('\n').map((x) => x.trim()).filter((x) => /^tun_[0-9a-f]{12}$/.test(x));
+    for (const r of roles) {
+      await this.sql(appId, [
+        `SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE usename = ${literal(r)};`,
+        `DROP OWNED BY ${ident(r)};`,
+        `DROP ROLE ${ident(r)};`,
+        '',
+      ].join('\n'));
+    }
+    return roles.length;
   }
 }

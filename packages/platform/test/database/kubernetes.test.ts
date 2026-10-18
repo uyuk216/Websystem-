@@ -27,6 +27,7 @@ function fake(o: { ready?: boolean } = {}) {
       return { code: 0, out: '', err: '' };
     },
     async execStream() { return Readable.from([Buffer.from('dump')]); },
+    async portForward() { throw new Error('not used'); },
   };
   return { api, applied, removed, execs };
 }

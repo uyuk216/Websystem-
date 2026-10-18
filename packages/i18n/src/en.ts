@@ -229,6 +229,8 @@ export const en = {
   'db.usage': 'Used {used} MB of {limit} MB',
   'db.readOnly': 'The storage limit was reached, so adding and changing data is stopped (reading still works). Delete data you no longer need; writing resumes once usage is below 80%. To delete, run BEGIN READ WRITE; first.',
   'db.blocked': 'The storage limit was far exceeded, so connections to the database are stopped. Restore an earlier backup below or delete the database.',
+  'db.tunnelTitle': 'Look inside from your computer',
+  'db.tunnelHelp': 'Run yourservice db connect --app {app} with the command-line tool to get a connection that works for one hour (the app\'s own password is never shown).',
   'db.backups': 'Backups',
   'db.backupsHelp': 'Saved automatically every hour and kept for 7 days. "Restore to this point" replaces the data with that backup (the state just before is saved too, so you can undo it).',
   'db.backupNow': 'Back up now',

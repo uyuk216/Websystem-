@@ -1,4 +1,4 @@
-import type { Readable } from 'node:stream';
+import type { Duplex, Readable } from 'node:stream';
 import { assertUuid } from '../runtime/driver.js';
 
 /** One PostgreSQL database for one dynamic app. The role is not a superuser and owns only this database. */
@@ -40,6 +40,15 @@ export interface DatabaseDriver {
    * that succeeds is it swapped in, so a failed restore leaves the current data untouched.
    */
   restore(appId: string, database: string, user: string, dump: Readable): Promise<void>;
+  /**
+   * A short-lived login for the owner's tunnel: it acts as the app's role (same privileges, objects it creates
+   * belong to the app's role) and expires at `validUntil`. Shown once to the caller, never stored.
+   */
+  createTemporaryLogin(appId: string, database: string, user: string, validUntil: Date): Promise<{ user: string; password: string }>;
+  /** Drops temporary logins whose validity has passed. */
+  dropExpiredLogins(appId: string): Promise<number>;
+  /** A raw TCP connection to the database server, opened from where only the app could reach it. */
+  connect(appId: string): Promise<Duplex>;
 }
 
 /** Names derived from the app id: the same for every driver, never from user input. */

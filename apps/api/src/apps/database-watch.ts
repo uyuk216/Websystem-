@@ -9,7 +9,7 @@ import { ownerContact } from '../usage/owner-contact.js';
 
 export interface DatabaseWatchOptions {
   db: Db;
-  databases: Pick<DatabaseDriver, 'sizeBytes' | 'setWriteMode'>;
+  databases: Pick<DatabaseDriver, 'sizeBytes' | 'setWriteMode'> & Partial<Pick<DatabaseDriver, 'dropExpiredLogins'>>;
   mailer?: Mailer;
   emailKey?: Buffer;
   now?: Date;
@@ -42,6 +42,8 @@ export async function checkDatabaseSizes(o: DatabaseWatchOptions): Promise<Array
   const out: Array<{ appId: string; sizeBytes: number; writeMode: DatabaseWriteMode }> = [];
   for (const r of rows) {
     const { database, user } = databaseNames(r.appId);
+    // Tunnel logins past their validity are dropped on every round.
+    await o.databases.dropExpiredLogins?.(r.appId).catch((e: unknown) => console.error('drop tunnel logins failed', r.appId, e));
     let size: number;
     try { size = await o.databases.sizeBytes(r.appId, database); } catch (e) { console.error('database size check failed', r.appId, e); continue; }
     const ratio = size / limit;

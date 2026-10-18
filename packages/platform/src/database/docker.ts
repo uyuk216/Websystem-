@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { PassThrough, type Readable } from 'node:stream';
+import { PassThrough, type Duplex, type Readable } from 'node:stream';
+import { joinStreams } from './streams.js';
 import { assertUuid } from '../runtime/driver.js';
 import type { DatabaseDriver, DatabaseEndpoint, DatabaseSpec, DatabaseStatus } from './driver.js';
 import { PostgresAdmin, type ExecResult } from './postgres-admin.js';
@@ -132,5 +133,21 @@ export class DockerDatabaseDriver extends PostgresAdmin implements DatabaseDrive
 
   async endpoint(appId: string): Promise<DatabaseEndpoint> {
     return { host: containerFor(appId), port: 5432, network: databaseNetwork(appId) };
+  }
+
+  /**
+   * A relay container on the database's internal network (the host cannot reach that network): its stdin/stdout
+   * carry the TCP stream. Removed when either side closes.
+   */
+  async connect(appId: string): Promise<Duplex> {
+    const { host, port, network } = await this.endpoint(appId);
+    const p = spawn(this.bin, ['run', '--rm', '-i', '--network', network!, '--label', `ys.db=${appId}`, '--memory', '32m', 'busybox', 'nc', host, String(port)], { stdio: ['pipe', 'pipe', 'ignore'] });
+    const d = joinStreams(p.stdout, p.stdin);
+    const stop = () => { if (p.exitCode === null) p.kill('SIGTERM'); };
+    d.on('close', stop);
+    d.on('error', stop);
+    p.on('close', () => d.destroy());
+    p.on('error', (e) => d.destroy(e));
+    return d;
   }
 }

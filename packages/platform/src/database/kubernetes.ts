@@ -1,5 +1,6 @@
 import { request as httpsRequest, type RequestOptions } from 'node:https';
-import { PassThrough, Writable, type Readable } from 'node:stream';
+import { PassThrough, Writable, type Duplex, type Readable } from 'node:stream';
+import { joinStreams } from './streams.js';
 import { applyPath, resourcePath } from '../runtime/kubernetes.js';
 import { assertUuid } from '../runtime/driver.js';
 import type { DatabaseDriver, DatabaseEndpoint, DatabaseSpec, DatabaseStatus } from './driver.js';
@@ -17,6 +18,8 @@ export interface DatabaseKubeApi {
   clusterPods(namespace: string, cluster: string): Promise<Array<{ name: string; ready: boolean; primary: boolean }>>;
   exec(namespace: string, pod: string, container: string, cmd: string[], stdin?: string | Readable): Promise<ExecResult>;
   execStream(namespace: string, pod: string, container: string, cmd: string[]): Promise<Readable>;
+  /** A stream forwarded to a pod's port (the kube API port-forward). */
+  portForward(namespace: string, pod: string, port: number): Promise<Duplex>;
 }
 
 export interface KubernetesDatabaseOptions extends DatabaseManifestOptions {
@@ -103,6 +106,11 @@ export class KubernetesDatabaseDriver extends PostgresAdmin implements DatabaseD
     return r.code === 0 ? 'running' : 'starting';
   }
 
+  async connect(appId: string): Promise<Duplex> {
+    const { ns, pod } = await this.primary(appId);
+    return (await this.api()).portForward(ns, pod, 5432);
+  }
+
   async endpoint(appId: string): Promise<DatabaseEndpoint> {
     const { ns, cluster } = await this.where(appId);
     return { host: `${cluster}-rw.${ns}.svc.${this.opts.clusterDomain ?? 'cluster.local'}`, port: 5432 };
@@ -120,6 +128,7 @@ async function createDatabaseKubeApi(): Promise<DatabaseKubeApi> {
   kc.loadFromDefault();
   const core = kc.makeApiClient(k8s.CoreV1Api);
   const exec = new k8s.Exec(kc);
+  const forward = new k8s.PortForward(kc);
 
   const call = async (method: string, path: string, body?: string, contentType?: string): Promise<{ status: number; text: string }> => {
     const cluster = kc.getCurrentCluster();
@@ -180,6 +189,16 @@ async function createDatabaseKubeApi(): Promise<DatabaseKubeApi> {
       if (typeof stdin === 'string') { const p = new PassThrough(); p.end(stdin); input = p; } else if (stdin) input = stdin;
       const code = await run(ns, pod, container, cmd, sink((s) => { if (out.length < 1 << 20) out += s; }), sink((s) => { if (err.length < 1 << 16) err += s; }), input);
       return { code, out, err };
+    },
+    async portForward(ns, pod, port) {
+      const toPod = new PassThrough();
+      const fromPod = new PassThrough();
+      const ws = await forward.portForward(ns, pod, [port], fromPod, null, toPod);
+      const d = joinStreams(fromPod, toPod);
+      const socket = ws as unknown as { close?: () => void; on?: (e: string, f: () => void) => void };
+      socket.on?.('close', () => d.destroy());
+      d.on('close', () => socket.close?.());
+      return d;
     },
     async execStream(ns, pod, container, cmd) {
       const out = new PassThrough();

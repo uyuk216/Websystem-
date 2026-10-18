@@ -3,6 +3,7 @@ import { Writable } from 'node:stream';
 import { parseArgs } from 'node:util';
 import { clearConfig, loadConfig, saveConfig } from './config.js';
 import { deploy, envList, envSet, envUnset, listApps, appLogs } from './commands.js';
+import { listenTunnel, startTunnelLogin } from './tunnel.js';
 
 const HELP = `Usage: yourservice <command>
 
@@ -14,6 +15,7 @@ Commands:
   env set NAME=VALUE --app <name>   Set a variable; \`env set NAME --stdin\` reads the value from stdin
   env unset NAME --app <name>       Remove a variable (restart the app to apply changes)
   logs --app <name> [--tail N]      Show the latest app output (default 100 lines, max 1000)
+  db connect --app <name> [--port 15432]  Open a temporary tunnel to the app's database on localhost
   logout                     Remove the saved token
 
 Environment:
@@ -64,7 +66,7 @@ export async function main(argv: string[], env: Record<string, string | undefine
     if (cmd === 'logout') { clearConfig(env); out.log('Logged out.'); return 0; }
     const cfg = loadConfig(env);
     if (!cfg) throw new Error('Not logged in. Run `yourservice login`.');
-    if (cmd === 'apps' || cmd === 'deploy' || cmd === 'env' || cmd === 'logs') checkApiUrl(api, insecure);
+    if (cmd === 'apps' || cmd === 'deploy' || cmd === 'env' || cmd === 'logs' || cmd === 'db') checkApiUrl(api, insecure);
     if (cmd === 'apps') {
       for (const a of await listApps({ api, token: cfg.token })) out.log(a.name);
       return 0;
@@ -81,6 +83,23 @@ export async function main(argv: string[], env: Record<string, string | undefine
       const tail = values.tail === undefined ? 100 : Number(values.tail);
       if (!Number.isInteger(tail) || tail < 1 || tail > 1000) throw new Error('--tail must be an integer from 1 to 1000.');
       for (const l of await appLogs({ api, token: cfg.token, app: values.app, tail })) out.log(l);
+      return 0;
+    }
+    if (cmd === 'db') {
+      const { values, positionals } = parseArgs({ args: rest, options: { app: { type: 'string' }, port: { type: 'string' } }, allowPositionals: true });
+      if (positionals[0] !== 'connect') throw new Error('Usage: db connect --app <name> [--port 15432]');
+      if (!values.app) throw new Error('Missing --app <name>.');
+      const port = values.port === undefined ? 15432 : Number(values.port);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('--port must be a port number.');
+      const app = (await listApps({ api, token: cfg.token })).find((a) => a.name === values.app);
+      if (!app) throw new Error(`App "${values.app}" not found.`);
+      const login = await startTunnelLogin({ api, token: cfg.token, appId: app.id });
+      const server = await listenTunnel({ api, token: cfg.token, appId: app.id, port, onError: (e) => console.error(e.message) });
+      const url = `postgres://${login.user}:${encodeURIComponent(login.password)}@127.0.0.1:${port}/${login.database}`;
+      out.log(`Tunnel open on 127.0.0.1:${port} (login valid until ${new Date(login.expiresAt).toLocaleString()}).`);
+      out.log(`Connect with: psql "${url}"`);
+      out.log('Press Ctrl+C to close.');
+      await new Promise<void>((resolve) => { process.once('SIGINT', () => { server.close(); resolve(); }); });
       return 0;
     }
     if (cmd === 'env') {
