@@ -169,6 +169,13 @@
       "when": 1792107814412,
       "tag": "0023_calm_squadron_supreme",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792285739063,
+      "tag": "0024_app_databases",
+      "breakpoints": true
     }
   ]
 }

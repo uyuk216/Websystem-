@@ -117,6 +117,8 @@ export async function deleteAppStorage(storage: Storage, appId: string, runtime?
   if (runtime) {
     await runtime.driver.stop(appId);
     await removeAppImages(appId);
+    // The database server goes with the app (its row was removed with the app by the cascade).
+    if (runtime.databases) await runtime.databases.remove(appId);
   }
   await storage.sources.deletePrefix(appPrefix(BUCKETS.sources, appId));
   await storage.sites.deletePrefix(appPrefix(BUCKETS.sites, appId));

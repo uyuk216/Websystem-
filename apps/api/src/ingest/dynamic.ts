@@ -5,10 +5,10 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createWriteStream } from 'node:fs';
 import { eq, sql } from 'drizzle-orm';
-import { DockerDriver, KubernetesDriver, buildImage, pushImage, collectLogs, detectStack, extractArchive, removeImage, waitHealthy, type AppRunSpec, type ArchiveFormat, type HealthOptions, type RuntimeDriver, type Storage } from 'platform';
+import { DockerDatabaseDriver, DockerDriver, KubernetesDriver, type DatabaseDriver, buildImage, pushImage, collectLogs, detectStack, extractArchive, removeImage, waitHealthy, type AppRunSpec, type ArchiveFormat, type HealthOptions, type RuntimeDriver, type Storage } from 'platform';
 import { DYNAMIC_LIMITS } from 'shared';
 import { withSystem, type Db } from '../db/client.js';
-import { getAppEnvForRun } from '../apps/env-vars.js';
+import { getRunInputs } from '../apps/databases.js';
 import { apps, deployments } from '../db/schema.js';
 import { runtimeBlockedUntil } from '../usage/runtime-hours.js';
 import { LIMITS, entryPath, inspect, relativeToPublishDir } from './inspect.js';
@@ -62,6 +62,8 @@ export interface DynamicRuntime {
   health?: HealthOptions;
   /** Cross-process per-app lock (see createWakeLocker). Held by rollouts so the sleeper and edge wakes never race them. */
   lock?: <T>(appId: string, fn: () => Promise<T>, opts?: { timeoutMs?: number }) => Promise<T>;
+  /** User databases (phase 4); undefined when unavailable (e.g. the Kubernetes driver until Task 6). */
+  databases?: DatabaseDriver;
   /** Registry the built images are pushed to (IMAGE_REGISTRY); needed when the cluster cannot see local Docker images. */
   imageRegistry?: string;
 }
@@ -80,6 +82,7 @@ export function createDynamicRuntime(env: NodeJS.ProcessEnv): DynamicRuntime | u
   if (kind !== 'docker' && kind !== 'kubernetes') throw new Error(`RUNTIME_DRIVER must be docker or kubernetes (got ${kind})`);
   return {
     driver: kind === 'kubernetes' ? new KubernetesDriver() : new DockerDriver(), envKey,
+    ...(kind === 'docker' ? { databases: new DockerDatabaseDriver() } : {}),
     ...(env.IMAGE_REGISTRY ? { imageRegistry: env.IMAGE_REGISTRY } : {}),
   };
 }
@@ -95,8 +98,8 @@ export async function buildRunSpec(db: Db, rt: DynamicRuntime, appId: string, de
     .from(deployments).innerJoin(apps, eq(apps.id, deployments.appId))
     .where(sql`${deployments.id} = ${deploymentId} AND ${deployments.appId} = ${appId}`));
   if (!d?.imageRef) return null;
-  const env = await getAppEnvForRun(db, rt.envKey, appId);
-  return { appId, deploymentId, ownerId: d.ownerId, image: d.imageRef, env: { ...env, PORT: String(CONTAINER_PORT) }, limits: runLimits, port: CONTAINER_PORT };
+  const { env, networks } = await getRunInputs(db, rt, appId);
+  return { appId, deploymentId, ownerId: d.ownerId, image: d.imageRef, env: { ...env, PORT: String(CONTAINER_PORT) }, limits: runLimits, port: CONTAINER_PORT, networks };
 }
 
 /**
@@ -124,6 +127,7 @@ export async function rolloutDynamic(db: Db, deploymentId: string, rt?: DynamicR
   // Held through start, health check and switch: the sleeper and the edge's wake never see a half-started app.
   const body = async (): Promise<void> => {
   let env: Record<string, string> = {};
+  let secrets: string[] = [];
   let started = false;
   try {
     // An owner who used up their runtime hours cannot start anything until the period rolls over.
@@ -137,12 +141,14 @@ export async function rolloutDynamic(db: Db, deploymentId: string, rt?: DynamicR
     }
     // An app being deployed counts as accessed, so it is not put to sleep right after going live.
     await withSystem(db, (tx) => tx.update(apps).set({ lastAccessAt: new Date() }).where(eq(apps.id, appId)));
-    env = await getAppEnvForRun(db, rt.envKey, appId);
-    await driver.start({ appId, deploymentId, ownerId: d.ownerId, image: imageRef, env: { ...env, PORT: String(CONTAINER_PORT) }, limits: runLimits, port: CONTAINER_PORT });
+    const run = await getRunInputs(db, rt, appId);
+    env = run.env;
+    secrets = run.secrets;
+    await driver.start({ appId, deploymentId, ownerId: d.ownerId, image: imageRef, env: { ...env, PORT: String(CONTAINER_PORT) }, limits: runLimits, port: CONTAINER_PORT, networks: run.networks });
     started = true;
     const health = await waitHealthy(driver, appId, deploymentId, rt.health);
     if (!health.ok) {
-      const logs = await collectLogs(driver, appId, deploymentId, Object.values(env));
+      const logs = await collectLogs(driver, appId, deploymentId, secrets);
       await driver.stopDeployment(appId, deploymentId);
       await withSystem(db, async (tx) => {
         await tx.update(deployments).set({

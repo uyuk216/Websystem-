@@ -8,7 +8,7 @@ import { withAccount, withSystem, type Db, type Tx } from '../db/client.js';
 import { apps, deployments } from '../db/schema.js';
 import { mayManage } from './apps.js';
 import { runtimeBlockedUntil } from '../usage/runtime-hours.js';
-import { getAppEnvForRun } from './env-vars.js';
+import { getRunInputs } from './databases.js';
 import { CONTAINER_PORT, type DynamicRuntime } from '../ingest/dynamic.js';
 
 /** The slice of pg-boss that deployment code needs (tests pass a fake). */
@@ -194,15 +194,15 @@ export async function rollback(
     // Under the app's wake lock (like a rollout), so the sleeper and the edge never race the start.
     const startTarget = async (): Promise<{ error: RollbackError; reason?: string; logs?: string[] } | null> => {
       try {
-        const env = await getAppEnvForRun(db, rt.envKey, appId);
+        const { env, networks, secrets } = await getRunInputs(db, rt, appId);
         await rt.driver.start({
           appId, deploymentId, ownerId: pre.ownerId, image: imageRef, env: { ...env, PORT: String(CONTAINER_PORT) },
-          limits: { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids }, port: CONTAINER_PORT,
+          limits: { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids }, port: CONTAINER_PORT, networks,
         });
         started = true;
         const health = await waitHealthy(rt.driver, appId, deploymentId, rt.health);
         if (!health.ok) {
-          const logs = await collectLogs(rt.driver, appId, deploymentId, Object.values(env));
+          const logs = await collectLogs(rt.driver, appId, deploymentId, secrets);
           if (!pre.wasLive) await rt.driver.stopDeployment(appId, deploymentId);
           return { error: 'start_failed', reason: health.reason === 'exited' ? 'deploy.error.app_exited' : 'deploy.error.health_check_failed', logs };
         }
@@ -265,15 +265,15 @@ export async function restart(
   if (await runtimeBlockedUntil(db, pre.ownerId)) return { error: 'runtime_limit' };
   const run = async (): Promise<{ error: RollbackError; reason?: string; logs?: string[] } | null> => {
     try {
-      const env = await getAppEnvForRun(db, rt.envKey, appId);
+      const { env, networks, secrets } = await getRunInputs(db, rt, appId);
       await rt.driver.stopDeployment(appId, pre.deploymentId);
       await rt.driver.start({
         appId, deploymentId: pre.deploymentId, ownerId: pre.ownerId, image: pre.imageRef, env: { ...env, PORT: String(CONTAINER_PORT) },
-        limits: { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids }, port: CONTAINER_PORT,
+        limits: { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids }, port: CONTAINER_PORT, networks,
       });
       const health = await waitHealthy(rt.driver, appId, pre.deploymentId, rt.health);
       if (!health.ok) {
-        const logs = await collectLogs(rt.driver, appId, pre.deploymentId, Object.values(env));
+        const logs = await collectLogs(rt.driver, appId, pre.deploymentId, secrets);
         // Leave the app asleep rather than with a broken container, so the next request goes through the normal wake path.
         await rt.driver.stopDeployment(appId, pre.deploymentId).catch((e: unknown) => console.error('stop after failed restart', appId, e));
         return { error: 'start_failed', reason: health.reason === 'exited' ? 'deploy.error.app_exited' : 'deploy.error.health_check_failed', logs };

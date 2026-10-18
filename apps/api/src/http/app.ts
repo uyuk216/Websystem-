@@ -19,6 +19,7 @@ import { STATIC_LIMITS } from 'shared';
 import { createDeployment, listDeployments, restart, rollback, type JobQueue } from '../apps/deployments.js';
 import { createApp as createAppRecord, deleteApp, getApp, listApps, listOwners, updateApp } from '../apps/apps.js';
 import { deleteEnvVar, listEnvVars, setEnvVar, type EnvError } from '../apps/env-vars.js';
+import { addDatabase, getDatabase, removeDatabase, type DatabaseError } from '../apps/databases.js';
 import { createApiToken, listApiTokens, revokeApiToken } from '../apps/api-tokens.js';
 import { claimDelivery, deployPush, findPushTargets, parsePush, releaseDelivery, verifyWebhook } from '../github/webhook.js';
 import { completeConnect, setGithub, startConnect } from '../github/link.js';
@@ -359,6 +360,19 @@ export function createApp(deps?: AppDeps): Hono {
     const appEnvKey = deps.config.appEnvKey;
     if (appEnvKey) {
       const envStatus: Record<EnvError, 400 | 403 | 404 | 413> = { not_found: 404, forbidden: 403, invalid_name: 400, reserved: 400, invalid_value: 400, too_large: 413, limit: 400 };
+      const dbStatus: Record<DatabaseError, 400 | 403 | 404 | 409 | 502 | 503> = { not_found: 404, forbidden: 403, not_dynamic: 400, exists: 409, unavailable: 503, failed: 502 };
+      app.get('/apps/:id/database', session, async (c) => {
+        const r = await getDatabase(deps.db, c.get('accountId'), c.req.param('id'));
+        return 'error' in r ? c.json(r, 404) : c.json(r);
+      });
+      app.post('/apps/:id/database', session, async (c) => {
+        const r = await addDatabase(deps.db, deps.runtime, c.get('accountId'), c.req.param('id'));
+        return 'error' in r ? c.json(r, dbStatus[r.error]) : c.json(r, 201);
+      });
+      app.delete('/apps/:id/database', session, async (c) => {
+        const r = await removeDatabase(deps.db, deps.runtime, c.get('accountId'), c.req.param('id'));
+        return 'error' in r ? c.json(r, dbStatus[r.error]) : c.json(r);
+      });
       app.get('/apps/:id/env', session, async (c) => {
         const r = await listEnvVars(deps.db, c.get('accountId'), c.req.param('id'));
         return Array.isArray(r) ? c.json({ vars: r }) : c.json(r, 404);

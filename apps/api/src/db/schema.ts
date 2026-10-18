@@ -264,3 +264,19 @@ export const accessLogs = pgTable('access_logs', {
   referrer: text('referrer'),
   ipPrefix: text('ip_prefix').notNull(),
 }, (t) => [index('access_logs_app_created_idx').on(t.appId, t.createdAt.desc()), index('access_logs_created_idx').on(t.createdAt)]);
+
+/** One user database per dynamic app (phase 4). The password is encrypted like env vars; never returned by the API. */
+export const appDatabases = pgTable('app_databases', {
+  appId: uuid('app_id').primaryKey().references(() => apps.id, { onDelete: 'cascade' }),
+  /** creating | ready | failed */
+  status: text('status').notNull().default('creating'),
+  passwordEnc: text('password_enc').notNull(),
+  sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull().default(0),
+  /** normal | read_only | blocked (see DatabaseWriteMode) */
+  writeMode: text('write_mode').notNull().default('normal'),
+  /** Highest usage level already mailed this month (0, 80 or 100) and the month it applies to (YYYY-MM). */
+  notifiedLevel: integer('notified_level').notNull().default(0),
+  notifiedMonth: text('notified_month'),
+  checkedAt: timestamp('checked_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});

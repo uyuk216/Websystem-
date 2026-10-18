@@ -3,7 +3,7 @@ import { collectLogs } from 'platform';
 import { withAccount, withSystem, type Db } from '../db/client.js';
 import { maskIp } from '../auth/login-history.js';
 import { accessLogs, apps } from '../db/schema.js';
-import { getAppEnvForRun } from './env-vars.js';
+import { getRunInputs } from './databases.js';
 import { mayManage } from './apps.js';
 import type { DynamicRuntime } from '../ingest/dynamic.js';
 
@@ -108,6 +108,6 @@ export async function getAppLogs(db: Db, rt: DynamicRuntime, accountId: string, 
   });
   if ('error' in a) return a;
   if (a.kind !== 'dynamic' || !a.active) return { lines: [] as string[] };
-  const env = await getAppEnvForRun(db, rt.envKey, appId);
-  return { lines: await collectLogs(rt.driver, appId, a.active, Object.values(env), n) };
+  const { secrets } = await getRunInputs(db, rt, appId);
+  return { lines: await collectLogs(rt.driver, appId, a.active, secrets, n) };
 }

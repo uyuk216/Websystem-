@@ -7,6 +7,18 @@ export const STATIC_LIMITS = {
 } as const;
 
 /** Dynamic-app limits (Phase 3 defaults). Plan-based selection arrives in Phase 5. */
+/** User databases (phase 4): one per dynamic app. */
+export const DATABASE_LIMITS = {
+  sizeBytes: 256 * 1024 ** 2,
+  connections: 10,
+  memoryMb: 256,
+  /** Share of sizeBytes: notify at warn, read-only at full, refuse connections at hard. */
+  warnRatio: 0.8,
+  hardRatio: 1.1,
+  backupIntervalMinutes: 60,
+  backupRetentionDays: 7,
+} as const;
+
 export const DYNAMIC_LIMITS = {
   memoryMb: 512,
   cpu: 0.5,
