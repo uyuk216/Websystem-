@@ -6,6 +6,8 @@ export interface AppRunSpec {
   env: Record<string, string>;
   limits: { memoryMb: number; cpu: number; pids: number };
   port: number;
+  /** Extra networks the app joins (Docker: its database's internal network). Ignored by Kubernetes. */
+  networks?: string[];
 }
 
 export interface RunHandle {

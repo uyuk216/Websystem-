@@ -122,6 +122,10 @@ export class DockerDriver implements RuntimeDriver {
       },
     });
     try {
+      for (const net of spec.networks ?? []) {
+        if (!/^ys-dbnet-[0-9a-f]{12}$/.test(net)) throw new Error(`refusing to join network ${net}`);
+        await this.docker.getNetwork(net).connect({ Container: container.id });
+      }
       await container.start();
     } catch (err) {
       await container.remove({ force: true }).catch(() => {});
