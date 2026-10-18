@@ -5,6 +5,7 @@ import { createDynamicRuntime } from 'api/dynamic';
 import { createWakeLocker, sleepIdleApps } from 'api/wake';
 import { startRuntimeMetering } from 'api/runtime-hours';
 import { startDatabaseWatch } from 'api/database-watch';
+import { startScheduledBackups } from 'api/database-backups';
 import { createMailer } from 'api/mailer';
 import { defaultHandlers, registerHandlers } from './worker.js';
 
@@ -41,7 +42,11 @@ if (runtime) {
   const mailer = process.env.SMTP_URL ? createMailer(process.env.SMTP_URL, process.env.MAIL_FROM || 'no-reply@localhost') : undefined;
   startRuntimeMetering({ db, driver: runtime.driver, mailer, emailKey });
   // User databases: size check every 5 minutes (80% mail, read-only at 100%, refused beyond the hard limit).
-  if (runtime.databases) startDatabaseWatch({ db, databases: runtime.databases, mailer, emailKey });
+  if (runtime.databases) {
+    startDatabaseWatch({ db, databases: runtime.databases, mailer, emailKey });
+    // Hourly backups (checked every 10 minutes), kept for DATABASE_LIMITS.backupRetentionDays.
+    startScheduledBackups(db, storage, runtime);
+  }
 }
 console.log('worker: waiting for jobs');
 

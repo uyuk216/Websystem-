@@ -15,7 +15,8 @@
     "./publish": "./src/ingest/publish.ts",
     "./dynamic": "./src/ingest/dynamic.ts",
     "./logs": "./src/apps/logs.ts",
-    "./database-watch": "./src/apps/database-watch.ts"
+    "./database-watch": "./src/apps/database-watch.ts",
+    "./database-backups": "./src/apps/database-backups.ts"
   },
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/server.ts",

@@ -20,6 +20,7 @@ import { createDeployment, listDeployments, restart, rollback, type JobQueue } f
 import { createApp as createAppRecord, deleteApp, getApp, listApps, listOwners, updateApp } from '../apps/apps.js';
 import { deleteEnvVar, listEnvVars, setEnvVar, type EnvError } from '../apps/env-vars.js';
 import { addDatabase, getDatabase, removeDatabase, type DatabaseError } from '../apps/databases.js';
+import { backupNow, listBackups, restoreBackup } from '../apps/database-backups.js';
 import { createApiToken, listApiTokens, revokeApiToken } from '../apps/api-tokens.js';
 import { claimDelivery, deployPush, findPushTargets, parsePush, releaseDelivery, verifyWebhook } from '../github/webhook.js';
 import { completeConnect, setGithub, startConnect } from '../github/link.js';
@@ -373,6 +374,24 @@ export function createApp(deps?: AppDeps): Hono {
         const r = await removeDatabase(deps.db, deps.runtime, c.get('accountId'), c.req.param('id'));
         return 'error' in r ? c.json(r, dbStatus[r.error]) : c.json(r);
       });
+      if (deps.storage) {
+        const storage = deps.storage;
+        const backupStatus = { not_found: 404, forbidden: 403, no_database: 409, unavailable: 503, failed: 502 } as const;
+        app.get('/apps/:id/database/backups', session, async (c) => {
+          const r = await listBackups(deps.db, storage, c.get('accountId'), c.req.param('id'));
+          return 'error' in r ? c.json(r, backupStatus[r.error]) : c.json(r);
+        });
+        app.post('/apps/:id/database/backups', session, async (c) => {
+          const r = await backupNow(deps.db, storage, deps.runtime, c.get('accountId'), c.req.param('id'));
+          return 'error' in r ? c.json(r, backupStatus[r.error]) : c.json(r, 201);
+        });
+        app.post('/apps/:id/database/restore', session, async (c) => {
+          const b = await c.req.json().catch(() => null) as { backupId?: unknown } | null;
+          if (typeof b?.backupId !== 'string' || b.backupId.length > 64) return c.json({ error: 'invalid' }, 400);
+          const r = await restoreBackup(deps.db, storage, deps.runtime, c.get('accountId'), c.req.param('id'), b.backupId);
+          return 'error' in r ? c.json(r, backupStatus[r.error]) : c.json(r);
+        });
+      }
       app.get('/apps/:id/env', session, async (c) => {
         const r = await listEnvVars(deps.db, c.get('accountId'), c.req.param('id'));
         return Array.isArray(r) ? c.json({ vars: r }) : c.json(r, 404);
