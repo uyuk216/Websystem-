@@ -1,12 +1,12 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { t, type Locale } from 'i18n';
+import { t } from 'i18n';
 import { DYNAMIC_LIMITS } from 'shared';
 import type { RuntimeDriver } from 'platform';
-import { decryptEmail } from '../crypto/email.js';
 import { withAccount, withSystem, type Db } from '../db/client.js';
-import { accounts, apps, owners, runtimeMinutes, runtimeUsage, teamMembers } from '../db/schema.js';
+import { apps, runtimeMinutes, runtimeUsage } from '../db/schema.js';
 import { UUID } from '../auth/cross-device.js';
 import type { Mailer } from '../mail/mailer.js';
+import { ownerContact } from './owner-contact.js';
 
 /* Periods are Asia/Tokyo (UTC+9, no DST): months start on the 1st 00:00 JST, fiscal years on April 1st 00:00 JST. */
 const JST_MS = 9 * 3600_000;
@@ -166,23 +166,11 @@ function notifyOwner(opts: MeterRuntimeOptions, ownerId: string, p: Period, used
   const { mailer, emailKey, db } = opts;
   if (!mailer || !emailKey) return;
   void Promise.resolve().then(async () => {
-    const target = await withSystem(db, async (tx) => {
-      const [o] = await tx.select({ kind: owners.kind, accountId: owners.accountId, teamId: owners.teamId }).from(owners).where(eq(owners.id, ownerId));
-      if (!o) return null;
-      let accountId = o.accountId;
-      if (o.kind === 'team' && o.teamId) {
-        const [m] = await tx.select({ accountId: teamMembers.accountId }).from(teamMembers)
-          .where(and(eq(teamMembers.teamId, o.teamId), eq(teamMembers.role, 'owner')));
-        accountId = m?.accountId ?? null;
-      }
-      if (!accountId) return null;
-      const [acc] = await tx.select({ emailEnc: accounts.emailEnc, locale: accounts.locale }).from(accounts).where(eq(accounts.id, accountId));
-      return acc ?? null;
-    });
+    const target = await ownerContact(db, ownerId, emailKey);
     if (!target) return;
-    const locale: Locale = target.locale === 'en' ? 'en' : 'ja';
+    const { locale } = target;
     const params = { period: p.key, limit: formatHours(p.limit), used: formatHours(used) };
-    await mailer.sendMail(decryptEmail(target.emailEnc, emailKey), t(locale, 'runtime.warnSubject', params), t(locale, 'runtime.warnBody', params));
+    await mailer.sendMail(target.email, t(locale, 'runtime.warnSubject', params), t(locale, 'runtime.warnBody', params));
   }).catch((err: unknown) => console.error('runtime 80% mail failed', ownerId, err));
 }
 

@@ -4,6 +4,7 @@ import { sweepStaleDeployments } from 'api/publish';
 import { createDynamicRuntime } from 'api/dynamic';
 import { createWakeLocker, sleepIdleApps } from 'api/wake';
 import { startRuntimeMetering } from 'api/runtime-hours';
+import { startDatabaseWatch } from 'api/database-watch';
 import { createMailer } from 'api/mailer';
 import { defaultHandlers, registerHandlers } from './worker.js';
 
@@ -39,6 +40,8 @@ if (runtime) {
   const emailKey = process.env.EMAIL_ENC_KEY ? Buffer.from(process.env.EMAIL_ENC_KEY, 'base64') : undefined;
   const mailer = process.env.SMTP_URL ? createMailer(process.env.SMTP_URL, process.env.MAIL_FROM || 'no-reply@localhost') : undefined;
   startRuntimeMetering({ db, driver: runtime.driver, mailer, emailKey });
+  // User databases: size check every 5 minutes (80% mail, read-only at 100%, refused beyond the hard limit).
+  if (runtime.databases) startDatabaseWatch({ db, databases: runtime.databases, mailer, emailKey });
 }
 console.log('worker: waiting for jobs');
 

@@ -14,7 +14,8 @@
     "./deployments": "./src/apps/deployments.ts",
     "./publish": "./src/ingest/publish.ts",
     "./dynamic": "./src/ingest/dynamic.ts",
-    "./logs": "./src/apps/logs.ts"
+    "./logs": "./src/apps/logs.ts",
+    "./database-watch": "./src/apps/database-watch.ts"
   },
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/server.ts",
