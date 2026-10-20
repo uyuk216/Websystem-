@@ -24,6 +24,12 @@ if [ ! -f .env.development ]; then
   echo ".env.development を作成しました"
 fi
 
+# 個人情報 DB の接続情報は本体用とは別のファイル（apps/api はこちらを読まない）
+if [ ! -f .env.pii.development ]; then
+  cp .env.pii.development.example .env.pii.development
+  echo ".env.pii.development を作成しました"
+fi
+
 docker compose -f dev/compose.yaml up -d --wait
 
 # MinIO のバケット（sources / sites）を冪等に作成する
@@ -46,6 +52,9 @@ if [ -f apps/api/package.json ]; then
 else
   echo "apps/api がまだ無いので db:migrate をスキップします"
 fi
+
+# 個人情報 DB（ys-pii-db）のマイグレーション
+pnpm --filter platform pii:migrate
 
 echo "開発環境の起動が完了しました"
 echo "アプリ（api / web / worker / static）は別ターミナルで: pnpm dev  （web http://localhost:5173、サイト http://<名前>.localhost:8090）"

@@ -37,6 +37,7 @@ services:
 
   mailpit:
     image: axllent/mailpit:v1.24
+    restart: unless-stopped
     ports:
       - "1025:1025"
       - "8025:8025"
@@ -50,7 +51,37 @@ services:
       timeout: 5s
       retries: 10
 
+  # 個人情報 DB（学生証の暗号文）。本体 DB とは別コンテナ・別ネットワーク（ys-piinet）。ホストにはループバックだけ公開する。
+  # このコンテナは default ネットワークに接続しない（apps/api のコンテナから届かない）。
+  pii-db:
+    image: postgres:16-alpine
+    container_name: ys-pii-db
+    environment:
+      # 開発専用のダミー値
+      POSTGRES_USER: pii_owner
+      POSTGRES_PASSWORD: pii_owner
+      POSTGRES_DB: pii
+      PII_ADMIN_PASSWORD: pii_admin
+      PII_INGEST_PASSWORD: pii_ingest
+    ports:
+      - "127.0.0.1:54321:5432"
+    networks:
+      - piinet
+    volumes:
+      - piidata:/var/lib/postgresql/data
+      - ./pii-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pii_owner -d pii"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+networks:
+  piinet:
+    name: ys-piinet
+
 volumes:
   pgdata:
+  piidata:
   miniodata:
   mailpitdata:
