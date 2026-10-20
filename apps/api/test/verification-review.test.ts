@@ -4,8 +4,10 @@ import { endOfMarchJst } from 'shared';
 import { encryptEmail } from '../src/crypto/email.js';
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { createFakeMailer } from './helpers/fake-mailer.js';
-import { accounts, studentVerifications, verificationUploads } from '../src/db/schema.js';
+import { accounts, grants, studentVerifications, verificationUploads } from '../src/db/schema.js';
 import { approveVerification, listPendingReviews, rejectVerification, type GrantStudent } from '../src/verification/review.js';
+import { resolveEntitlements } from '../src/grants/entitlements.js';
+import { ensureAccountOwner } from '../src/teams/teams.js';
 import { purgeVerifications } from '../src/verification/purge.js';
 import type { IdBlobStore } from '../src/verification/blob-store.js';
 
@@ -60,6 +62,29 @@ const fixture = () => {
   return { mem, mailer, granted, grantStudent, deps: (now: Date, extra: Partial<{ grantStudent: GrantStudent }> = {}) => ({ store: mem.store, grantStudent, mailer, emailKey: KEY, now, ...extra }) };
 };
 const row = async (db: TestDb, id: string) => (await db.select().from(studentVerifications).where(eq(studentVerifications.id, id)))[0]!;
+
+describe('approve with the real grantStudent', () => {
+  it('approval makes the plan Student until 3/31 (suspend 5/1); a failed deletion grants nothing', () => withTestDb(async (db) => {
+    const f = fixture();
+    const now = jst('2027-02-10T12:00:00');
+    const { a, v } = await seed(db, f.mem, { gradYear: 2028, submittedAt: now });
+    const ownerId = await ensureAccountOwner(db, a.id);
+    expect((await resolveEntitlements(db, ownerId, now)).plan).toBe('none');
+    f.mem.state.deleteFails = true;
+    const deps = { store: f.mem.store, mailer: f.mailer, emailKey: KEY, now }; // no grantStudent: the real one is used
+    expect(await approveVerification(db, deps, { verificationId: v.id, operatorId: crypto.randomUUID(), newFiscalYearDocConfirmed: false })).toEqual({ error: 'delete_failed' });
+    expect((await resolveEntitlements(db, ownerId, now)).plan).toBe('none');
+    f.mem.state.deleteFails = false;
+    const op = crypto.randomUUID();
+    expect(await approveVerification(db, deps, { verificationId: v.id, operatorId: op, newFiscalYearDocConfirmed: false })).toEqual({ ok: { validUntil: endOfMarchJst(2027) } });
+    const e = await resolveEntitlements(db, ownerId, now);
+    expect(e).toMatchObject({ plan: 'student', endsAt: endOfMarchJst(2027), suspendOn: jst('2027-05-01T00:00:00') });
+    expect(e.dynamic.appsPerOwner).toBe(1);
+    expect((await resolveEntitlements(db, ownerId, jst('2027-04-01T00:00:00'))).plan).toBe('none'); // expired: back to "none"
+    const [g] = await db.select().from(grants);
+    expect(g).toMatchObject({ targetKind: 'account', targetId: a.id, kind: 'student', approvedBy: op });
+  }));
+});
 
 describe('approve / reject', () => {
   it('approves: status, expiry 3/31, Student grant, ciphertext deleted, mail sent', () => withTestDb(async (db) => {

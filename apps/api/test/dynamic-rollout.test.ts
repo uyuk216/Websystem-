@@ -8,6 +8,7 @@ import { makeZip } from '../../../packages/platform/test/ingest/helpers.js';
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { accounts, apps, deployments, owners, teamMembers, teams } from '../src/db/schema.js';
 import { ensureAccountOwner } from '../src/teams/teams.js';
+import { giveStudent } from './helpers/grants.js';
 import { createApp } from '../src/apps/apps.js';
 import { createDeployment, listDeployments, rollback } from '../src/apps/deployments.js';
 import { setEnvVar } from '../src/apps/env-vars.js';
@@ -46,6 +47,7 @@ const body = async (appId: string, depId: string) => {
 async function setup(db: TestDb) {
   const [a] = await db.insert(accounts).values({ emailHash: `ro${n++}`, emailEnc: 'e', displayName: 'A', locale: 'ja', adultFrom: '2030-01' }).returning();
   const ownerId = await ensureAccountOwner(db, a!.id);
+  await giveStudent(db, a!.id);
   const { appId } = await createApp(db, a!.id, { name: `r-${randomUUID().slice(0, 8)}`, ownerId }) as { appId: string };
   await db.update(apps).set({ kind: 'dynamic' }).where(eq(apps.id, appId));
   cleanup.push(appId);

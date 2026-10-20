@@ -4,15 +4,14 @@
  * - 4 月以降は新年度の学生証か在学証明書を要求する（承認画面にチェックを出し、確認なしでは承認できない）。
  * - 有効期限は年度末の 3/31。3 月に承認した場合は翌年度末（新年度の再登録）。
  */
-const JST_MS = 9 * 3600_000;
+import { JST_OFFSET_MS as JST_MS, endOfMarchJst } from './fiscal-dates.js';
 
 const jstParts = (d: Date): { year: number; month: number } => {
   const j = new Date(d.getTime() + JST_MS);
   return { year: j.getUTCFullYear(), month: j.getUTCMonth() + 1 };
 };
 
-/** その年の 3/31 の終わり（JST 23:59:59.999）。 */
-export const endOfMarchJst = (year: number): Date => new Date(Date.UTC(year, 3, 1) - JST_MS - 1);
+export { endOfMarchJst };
 
 export interface EligibilityVerdict {
   /** 卒業予定年から見て、判定の対象の年度に在学しているか。 */

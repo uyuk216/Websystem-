@@ -45,3 +45,15 @@
 - **要対応（オフラインのため未実施）**：`apps/admin` は新しい workspace パッケージ。`pnpm-lock.yaml` の importer と `node_modules` のリンクはオンラインの `pnpm install`（新規パッケージなし、既存と同じバージョン）が必要。それまで `tsconfig.json` の `typeRoots` で `apps/api` の `@types/node` を借りており、`tsc`/`eslint`/`vitest` はルートの bin で動く（`dev`/`start` の `tsx` は install 後）。install 後は `typeRoots` の借用行は削除可。
 - テスト：`apps/api/test/admin.test.ts`（19 件：Tailscale 範囲、各種 404/401、公開側に /admin なし、記録の不変性・ハッシュ連鎖・改ざん検知、権限分離、昇格ログイン、設定、危険な操作）、`apps/admin/test/shell.test.ts`。api 244 件全通過。`pnpm -r typecheck` / `pnpm -r lint` 通過。
 - 持ち越し：同時追記時の連鎖の整合は advisory lock の設計で担保したが、複数接続での負荷テストは未実施（テスト DB が 1 接続）。`add-operator.ts` は Task 11。画像閲覧（復号）の記録は `withAdmin` を通すだけで Task 10 で使う。
+
+### Task 6: 付与の土台とプランの上限 — 実装済み（未コミット）
+- DB: `0027_grants.sql`（`grants`：RLS で本人は自分宛て（アカウント／見えるオーナー／見えるアプリ）だけ読め、`platform_api` は SELECT のみ。書くのは owner ロールと管理側 `platform_admin`）。Starter は `target_id` の部分一意索引（取り消し後も再付与しない）、Student は同じ対象に有効なものを 1 つだけ（再登録は期限の更新）。
+- `shared`: `plans.ts` に `buildEntitlements`（純粋関数）・`STARTER_LIMITS`（**仮：Student と同じ + 動的アプリ 2。フェーズ 7 で更新**）・`NO_PLAN_DYNAMIC_LIMITS`・`LIMIT_SETTING_KEYS`、`fiscal-dates.ts`（JST の 3/31・5/1、`suspendDateFor`）。`STATIC/DYNAMIC/DATABASE_LIMITS` の値は Student の値としてそのまま。
+- `api/grants/{grants,entitlements}.ts`：`resolveEntitlements(db, ownerId, at)`（付与なし = 「なし」、期限 `ends_at` は最後の瞬間を含む、取り消し・期限切れで「なし」に戻る）、`grantStudent(tx, accountId, validUntil, {approvedBy})`、`revokeGrant`。個人オーナー = そのアカウントの付与、**チームオーナー = チームの owner ロールのメンバーの付与を引き継ぐ**（設計判断）。event_boost は `extraTransferBytes` / `extraMemoryMb` / `sleepOff` を期間中だけ上乗せ（運用・承認は Task 9）。
+- 上限の参照の置き換え：`createApp`（動的は付与なしで `plan_required`、動的の数は `appsPerOwner`、総数は従来どおり静的の上限が基準）、`addDatabase`/`getDatabase`（付与なしで `plan_required`、サイズ・接続数・メモリはプランから）、`runtime-hours`（月／年の時間をオーナーのプランから。付与なし = 0 時間 = 期間の終わりまでブロック）、`database-watch`（オーナーごとのサイズ。付与が切れても Student のサイズで見て、DB を勝手にブロックしない = 停止は Task 7）。HTTP は `plan_required` を 403。
+- `platform_settings` の上書き：`limits.<static|dynamic|database>.<名前>` の既知キーで、0 以上の数だけ有効（不正な値・未知のキーは無視）。Admin の `PUT /admin/settings/:key` は `limits.*` の不正なキー・値を 400 で拒否（記録は Task 5 のまま）。「なし」の動的は上書きしても 0。
+- Task 4 の配線：`approveVerification` の `grantStudent` は省略すると本物（承認と同一トランザクション、`approved_by` = 運営者）。削除に失敗したら付与も巻き戻ることをテストで確認。
+- フィクスチャ：`test/helpers/grants.ts` の `giveStudent`（2020〜2100 年）を動的アプリを作る既存テストの `setup` に追加しただけ（assert の変更なし）。`admin.test.ts` の設定テストは実在の `limits.dynamic.appsPerOwner` に合わせ、拒否の 2 件を追加。
+- `apps/admin/tsconfig.json` の `typeRoots` 借用を削除（`pnpm install` 済みで自前の `@types/node` を使う）。
+- テスト：`api/test/grants.test.ts`（6 件）+ `verification-review` に 1 件。api 251 / static 35 / shared 45 / worker 5 / admin 2 全通過、`pnpm -r typecheck` / `lint` 通過。
+- 持ち越し：静的サイトの転送量上限（`transfer.ts`）・実行時のメモリ／CPU（`deployments.ts`）・ビルド上限（`ingest/dynamic.ts`）・スリープ時間（`wake.ts`）はまだ定数のまま（`resolveEntitlements` には値がある。ブーストの反映は Task 9）。付与切れの扱い（停止・猶予）は Task 7。付与を操作する管理画面 API は Task 10。実行ブロックの理由は `runtime_limit` のまま（「なし」でも同じ）。

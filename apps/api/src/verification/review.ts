@@ -5,14 +5,17 @@ import { decryptEmail } from '../crypto/email.js';
 import { withSystem, type Db, type Tx } from '../db/client.js';
 import { accounts, studentVerifications, verificationUploads } from '../db/schema.js';
 import type { Mailer } from '../mail/mailer.js';
+import { grantStudent } from '../grants/grants.js';
 import type { IdBlobStore } from './blob-store.js';
 
-/** 付与（Grant）の口。Task 6 の `grantStudent` を渡す。承認と同じトランザクションの中で呼ばれ、失敗したら承認は確定しない。 */
-export type GrantStudent = (tx: Tx, accountId: string, validUntil: Date) => Promise<void>;
+const defaultGrantStudent: GrantStudent = (tx, accountId, validUntil, approvedBy) => grantStudent(tx, accountId, validUntil, { approvedBy });
+
+/** 付与（Grant）の口。省略すると本物の `grantStudent`（grants/grants.ts）。承認と同じトランザクションの中で呼ばれ、失敗したら承認は確定しない。 */
+export type GrantStudent = (tx: Tx, accountId: string, validUntil: Date, approvedBy?: string) => Promise<void>;
 
 export interface ReviewDeps {
   store: IdBlobStore;
-  grantStudent: GrantStudent;
+  grantStudent?: GrantStudent;
   mailer?: Mailer;
   emailKey?: Buffer;
   now?: Date;
@@ -100,7 +103,7 @@ export async function approveVerification(db: Db, deps: ReviewDeps, args: { veri
       if (!verdict.enrolled) return { error: 'not_enrolled' as const };
       if (verdict.requiresNewFiscalYearDoc && !args.newFiscalYearDocConfirmed) return { error: 'new_year_doc_required' as const };
       await tx.update(studentVerifications).set({ status: 'approved', validUntil: verdict.validUntil, reviewedAt: now, rejectReason: null }).where(eq(studentVerifications.id, v.id));
-      await deps.grantStudent(tx, v.accountId, verdict.validUntil);
+      await (deps.grantStudent ?? defaultGrantStudent)(tx, v.accountId, verdict.validUntil, args.operatorId);
       await tx.update(verificationUploads).set({ blobRef: null }).where(eq(verificationUploads.verificationId, v.id));
       try {
         await deps.store.finalizeReview({ uploadId: reviewed.id, accountId: v.accountId, operatorId: args.operatorId, result: 'approved', deleteUploadIds: uploads.map((u) => u.id) });

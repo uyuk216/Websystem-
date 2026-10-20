@@ -302,7 +302,7 @@ export function createApp(deps?: AppDeps): Hono {
       const r = await transferOwnership(deps.db, c.req.param('id'), c.get('accountId'), b.toAccountId);
       return 'error' in r ? teamErr(c, r.error) : c.json(r);
     });
-    const appStatus = { format: 400, reserved: 400, taken: 409, forbidden: 403, limit: 409, not_found: 404, invalid: 400 } as const;
+    const appStatus = { format: 400, reserved: 400, taken: 409, forbidden: 403, limit: 409, plan_required: 403, not_found: 404, invalid: 400 } as const;
     app.get('/me/owners', session, async (c) => c.json({ owners: await listOwners(deps.db, c.get('accountId')) }));
     app.get('/apps', session, async (c) => c.json({ apps: await listApps(deps.db, c.get('accountId')) }));
     app.post('/apps', session, async (c) => {
@@ -390,7 +390,7 @@ export function createApp(deps?: AppDeps): Hono {
     const appEnvKey = deps.config.appEnvKey;
     if (appEnvKey) {
       const envStatus: Record<EnvError, 400 | 403 | 404 | 413> = { not_found: 404, forbidden: 403, invalid_name: 400, reserved: 400, invalid_value: 400, too_large: 413, limit: 400 };
-      const dbStatus: Record<DatabaseError, 400 | 403 | 404 | 409 | 502 | 503> = { not_found: 404, forbidden: 403, not_dynamic: 400, exists: 409, unavailable: 503, failed: 502 };
+      const dbStatus: Record<DatabaseError, 400 | 403 | 404 | 409 | 502 | 503> = { not_found: 404, forbidden: 403, not_dynamic: 400, exists: 409, unavailable: 503, failed: 502, plan_required: 403 };
       app.get('/apps/:id/database', session, async (c) => {
         const r = await getDatabase(deps.db, c.get('accountId'), c.req.param('id'));
         return 'error' in r ? c.json(r, 404) : c.json(r);

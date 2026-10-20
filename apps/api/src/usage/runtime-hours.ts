@@ -5,6 +5,7 @@ import type { RuntimeDriver } from 'platform';
 import { withAccount, withSystem, type Db } from '../db/client.js';
 import { apps, runtimeMinutes, runtimeUsage } from '../db/schema.js';
 import { UUID } from '../auth/cross-device.js';
+import { resolveEntitlements } from '../grants/entitlements.js';
 import type { Mailer } from '../mail/mailer.js';
 import { ownerContact } from './owner-contact.js';
 
@@ -41,12 +42,14 @@ const WARN_RATIO = 0.8;
 
 export type PeriodKind = 'month' | 'fiscalYear';
 interface Period { kind: PeriodKind; key: string; limit: number; end: Date }
-function periodsAt(at: Date): Period[] {
+/** The period keys/ends of `at`; the limits (in minutes) come from the owner's plan (`resolveEntitlements`), the Student defaults otherwise. */
+function periodsAt(at: Date, limits: { monthly: number; fiscal: number } = { monthly: MONTHLY_LIMIT_MINUTES, fiscal: FISCAL_LIMIT_MINUTES }): Period[] {
   return [
-    { kind: 'month', key: jstMonthKey(at), limit: MONTHLY_LIMIT_MINUTES, end: nextMonthStart(at) },
-    { kind: 'fiscalYear', key: fiscalYearKey(at), limit: FISCAL_LIMIT_MINUTES, end: nextFiscalYearStart(at) },
+    { kind: 'month', key: jstMonthKey(at), limit: limits.monthly, end: nextMonthStart(at) },
+    { kind: 'fiscalYear', key: fiscalYearKey(at), limit: limits.fiscal, end: nextFiscalYearStart(at) },
   ];
 }
+const planLimits = (e: { dynamic: { monthlyHours: number; fiscalYearHours: number } }) => ({ monthly: e.dynamic.monthlyHours * 60, fiscal: e.dynamic.fiscalYearHours * 60 });
 
 export function formatHours(minutes: number): string {
   return `${(minutes / 60).toFixed(1)} h`;
@@ -58,7 +61,8 @@ export function formatHours(minutes: number): string {
  */
 export async function runtimeBlockedUntil(db: Db, ownerId: string, at: Date = new Date()): Promise<Date | null> {
   if (!UUID.test(ownerId)) return null;
-  const periods = periodsAt(at);
+  // No grant = the "none" plan = 0 hours: the owner is blocked until the end of the period.
+  const periods = periodsAt(at, planLimits(await resolveEntitlements(db, ownerId, at)));
   const rows = await withSystem(db, (tx) => tx.select({ period: runtimeUsage.period, minutes: runtimeUsage.minutes })
     .from(runtimeUsage).where(and(eq(runtimeUsage.ownerId, ownerId), inArray(runtimeUsage.period, periods.map((p) => p.key)))));
   let until: Date | null = null;
@@ -106,7 +110,6 @@ export async function meterRuntime(opts: MeterRuntimeOptions): Promise<number> {
   const { db, driver } = opts;
   const at = (opts.now ?? (() => new Date()))();
   const minute = truncateToMinute(at);
-  const periods = periodsAt(minute);
   const running = await driver.runningCount();
   let recorded = 0;
   const exhausted = new Set<string>();
@@ -121,6 +124,7 @@ export async function meterRuntime(opts: MeterRuntimeOptions): Promise<number> {
         const [a] = await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId));
         if (!a) return [];
         const out: Outcome[] = [];
+        const periods = periodsAt(minute, planLimits(await resolveEntitlements(tx, a.ownerId, minute)));
         for (const p of periods) {
           const [row] = await tx.insert(runtimeUsage).values({ ownerId: a.ownerId, period: p.key, minutes: containers })
             .onConflictDoUpdate({ target: [runtimeUsage.ownerId, runtimeUsage.period], set: { minutes: sql`${runtimeUsage.minutes} + excluded.minutes` } })
@@ -193,7 +197,9 @@ export interface RuntimeUsage { month: RuntimePeriodUsage; fiscalYear: RuntimePe
 /** Runtime minutes of the app's owner for this JST month and fiscal year (RLS applies); null when the app is not visible. */
 export async function getRuntimeUsage(db: Db, accountId: string, appId: string, at: Date = new Date()): Promise<RuntimeUsage | null> {
   if (!UUID.test(appId)) return null;
-  const [m, fy] = periodsAt(at) as [Period, Period];
+  const seen = await withAccount(db, accountId, async (tx) => (await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId)))[0] ?? null);
+  if (!seen) return null;
+  const [m, fy] = periodsAt(at, planLimits(await resolveEntitlements(db, seen.ownerId, at))) as [Period, Period];
   return withAccount(db, accountId, async (tx) => {
     const [a] = await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId));
     if (!a) return null;

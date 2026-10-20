@@ -9,6 +9,7 @@ import { makeZip } from '../../../packages/platform/test/ingest/helpers.js';
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { accounts, apps, deployments } from '../src/db/schema.js';
 import { ensureAccountOwner } from '../src/teams/teams.js';
+import { giveStudent } from './helpers/grants.js';
 import { createApp } from '../src/apps/apps.js';
 import { createDeployment } from '../src/apps/deployments.js';
 import { deleteAppStorage, processDeployment } from '../src/ingest/publish.js';
@@ -31,6 +32,7 @@ afterAll(() => { for (const t of images) { try { execFileSync('docker', ['image'
 async function deploy(db: TestDb, files: Record<string, string>) {
   const [a] = await db.insert(accounts).values({ emailHash: `dyn${n++}`, emailEnc: 'e', displayName: 'A', locale: 'ja', adultFrom: '2030-01' }).returning();
   const ownerId = await ensureAccountOwner(db, a!.id);
+  await giveStudent(db, a!.id);
   const { appId } = await createApp(db, a!.id, { name: `d-${randomUUID().slice(0, 8)}`, ownerId }) as { appId: string };
   await db.update(apps).set({ kind: 'dynamic' }).where(eq(apps.id, appId));
   const r = await createDeployment(db, storage, queue, a!.id, appId, { source: 'upload', archive: zip(files), format: 'zip' });

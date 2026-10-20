@@ -1,3 +1,4 @@
+import { isLimitSettingKey, validLimitValue } from 'shared';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -137,6 +138,8 @@ export function createAdminApp(deps: AdminDeps): Hono {
     const key = c.req.param('key');
     const b = await jsonBody(c);
     if (!/^[a-z0-9_.-]{1,100}$/i.test(key) || !b || !('value' in b)) return c.json({ error: 'invalid' }, 400);
+    // Plan limits (`limits.*`) must be known keys with a non-negative number, otherwise they would silently do nothing.
+    if (key.startsWith('limits.') && (!isLimitSettingKey(key) || !validLimitValue(b.value))) return c.json({ error: 'invalid' }, 400);
     const op = c.get('operator');
     // Before/after values are part of the record.
     await withAdmin(db, op, { action: 'settings.update', target: key }, async (tx, ctx) => {

@@ -1,10 +1,11 @@
 import { and, count, desc, eq } from 'drizzle-orm';
-import { STATIC_LIMITS, can, validateAppName, type TeamRole } from 'shared';
+import { can, validateAppName, type TeamRole } from 'shared';
 import { withAccount, withSystem, type Db, type Tx } from '../db/client.js';
 import { apps, deployments, owners, teamMembers, teams } from '../db/schema.js';
 import { UUID } from '../auth/cross-device.js';
+import { resolveEntitlements } from '../grants/entitlements.js';
 
-export type CreateAppError = 'format' | 'reserved' | 'taken' | 'forbidden' | 'limit';
+export type CreateAppError = 'format' | 'reserved' | 'taken' | 'forbidden' | 'limit' | 'plan_required';
 
 const columns = {
   id: apps.id, ownerId: apps.ownerId, name: apps.name, kind: apps.kind, publishDir: apps.publishDir,
@@ -28,6 +29,10 @@ export async function createApp(
   if (!UUID.test(input.ownerId)) return { error: 'forbidden' };
   const publishDir = normalizePublishDir(input.publishDir ?? '');
   if (publishDir === null) return { error: 'format' };
+  // Plan limits come from the owner's grants (read as the system, so before the account transaction).
+  const ent = await resolveEntitlements(db, input.ownerId);
+  const kind = input.kind ?? 'static';
+  if (kind === 'dynamic' && ent.dynamic.appsPerOwner === 0) return { error: 'plan_required' };
   return withAccount(db, accountId, async (tx) => {
     // Lock the owner row: serialises concurrent creates for the same owner so the limit holds.
     // RLS hides owners the account cannot act for, so "not found" means forbidden.
@@ -38,9 +43,14 @@ export async function createApp(
         .where(and(eq(teamMembers.teamId, o.teamId!), eq(teamMembers.accountId, accountId)));
       if (!m || !can(m.role as TeamRole, 'deploy')) return { error: 'forbidden' as const };
     }
+    // Total apps are capped by the static-site limit (as before); dynamic apps additionally by the plan's dynamic limit.
     const [n] = await tx.select({ n: count() }).from(apps).where(eq(apps.ownerId, o.id));
-    if ((n?.n ?? 0) >= STATIC_LIMITS.sitesPerOwner) return { error: 'limit' as const };
-    const [row] = await tx.insert(apps).values({ ownerId: o.id, name: input.name, publishDir, kind: input.kind ?? 'static' })
+    if ((n?.n ?? 0) >= Math.max(ent.static.sitesPerOwner, kind === 'dynamic' ? ent.dynamic.appsPerOwner : 0)) return { error: 'limit' as const };
+    if (kind === 'dynamic') {
+      const [d] = await tx.select({ n: count() }).from(apps).where(and(eq(apps.ownerId, o.id), eq(apps.kind, 'dynamic')));
+      if ((d?.n ?? 0) >= ent.dynamic.appsPerOwner) return { error: 'limit' as const };
+    }
+    const [row] = await tx.insert(apps).values({ ownerId: o.id, name: input.name, publishDir, kind })
       .onConflictDoNothing({ target: apps.name }).returning({ id: apps.id });
     return row ? { appId: row.id } : { error: 'taken' as const };
   });

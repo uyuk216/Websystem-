@@ -370,3 +370,30 @@ export const scheduledDangerousActions = pgTable('scheduled_dangerous_actions', 
   cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
   createdAt: createdAt(),
 }, (t) => [index('scheduled_dangerous_actions_due_idx').on(t.status, t.executeAfter)]);
+
+/**
+ * 付与（Grant、フェーズ 5）。Student / Starter / イベントブーストの「いまの権利」を表す。プランは付与から計算する（grants/entitlements.ts）。
+ * 読めるのは本人（自分のアカウント・自分が使えるオーナー・見えるアプリ宛て）だけ。書き込みはシステム（owner ロール）と管理側（platform_admin）だけ。
+ */
+export const grants = pgTable('grants', {
+  id: id(),
+  targetKind: text('target_kind', { enum: ['account', 'owner', 'app'] }).notNull(),
+  targetId: uuid('target_id').notNull(),
+  kind: text('kind', { enum: ['student', 'starter', 'event_boost'] }).notNull(),
+  params: jsonb('params').notNull().default(sql`'{}'::jsonb`),
+  startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
+  endsAt: timestamp('ends_at', { withTimezone: true }).notNull(),
+  /** 停止する日（Student は有効期限 3/31 の次の 5/1）。 */
+  suspendOn: timestamp('suspend_on', { withTimezone: true }),
+  reason: text('reason').notNull().default(''),
+  /** 運営者のアカウント ID か 'system'。 */
+  approvedBy: text('approved_by').notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  createdAt: createdAt(),
+}, (t) => [
+  index('grants_target_idx').on(t.targetKind, t.targetId),
+  // Starter は 1 人 1 回（取り消した後も再付与しない）。Student は同じ対象に有効なものを 1 つだけ（再登録は期限の更新）。
+  uniqueIndex('grants_starter_once_idx').on(t.targetId).where(sql`${t.kind} = 'starter'`),
+  uniqueIndex('grants_student_active_idx').on(t.targetKind, t.targetId).where(sql`${t.kind} = 'student' AND ${t.revokedAt} IS NULL`),
+  check('grants_period_check', sql`${t.endsAt} > ${t.startsAt}`),
+]);

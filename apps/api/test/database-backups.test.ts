@@ -5,6 +5,7 @@ import { createStorage, DockerDatabaseDriver, loadStorageConfig, type Storage } 
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { accounts } from '../src/db/schema.js';
 import { ensureAccountOwner } from '../src/teams/teams.js';
+import { giveStudent } from './helpers/grants.js';
 import { createApp } from '../src/apps/apps.js';
 import { addDatabase, getRunInputs } from '../src/apps/databases.js';
 import { backupNow, listBackups, restoreBackup, runScheduledBackups, takeBackup } from '../src/apps/database-backups.js';
@@ -36,6 +37,7 @@ function sqlAsApp(network: string, url: string, sql: string): string {
 async function setup(db: TestDb) {
   const [a] = await db.insert(accounts).values({ emailHash: randomUUID(), emailEnc: 'e', displayName: 'A', locale: 'ja', adultFrom: '2030-01' }).returning();
   const ownerId = await ensureAccountOwner(db, a!.id);
+  await giveStudent(db, a!.id);
   const { appId } = await createApp(db, a!.id, { name: `b-${randomUUID().slice(0, 8)}`, ownerId, kind: 'dynamic' }) as { appId: string };
   cleanup.push(appId);
   expect(await addDatabase(db, rt, a!.id, appId)).toEqual({ ok: true });

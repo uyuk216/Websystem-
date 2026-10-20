@@ -4,6 +4,7 @@ import { databaseNames, type DatabaseDriver, type DatabaseWriteMode } from 'plat
 import { DATABASE_LIMITS } from 'shared';
 import { withSystem, type Db } from '../db/client.js';
 import { appDatabases, apps } from '../db/schema.js';
+import { resolveEntitlements } from '../grants/entitlements.js';
 import type { Mailer } from '../mail/mailer.js';
 import { ownerContact } from '../usage/owner-contact.js';
 
@@ -34,7 +35,6 @@ const month = (d: Date) => d.toISOString().slice(0, 7);
 /** Measures every ready database once; applies the write mode and mails the owner at 80% and 100% (once per month each). */
 export async function checkDatabaseSizes(o: DatabaseWatchOptions): Promise<Array<{ appId: string; sizeBytes: number; writeMode: DatabaseWriteMode }>> {
   const now = o.now ?? new Date();
-  const limit = o.limitBytes ?? DATABASE_LIMITS.sizeBytes;
   const rows = await withSystem(o.db, (tx) => tx.select({
     appId: appDatabases.appId, writeMode: appDatabases.writeMode, notifiedLevel: appDatabases.notifiedLevel, notifiedMonth: appDatabases.notifiedMonth,
     ownerId: apps.ownerId, name: apps.name,
@@ -46,6 +46,8 @@ export async function checkDatabaseSizes(o: DatabaseWatchOptions): Promise<Array
     await o.databases.dropExpiredLogins?.(r.appId).catch((e: unknown) => console.error('drop tunnel logins failed', r.appId, e));
     let size: number;
     try { size = await o.databases.sizeBytes(r.appId, database); } catch (e) { console.error('database size check failed', r.appId, e); continue; }
+    // Plan limit of the owner. Without a grant (lapsed) the Student size still applies: the database is kept, not blocked (suspension is Task 7).
+    const limit = o.limitBytes ?? ((await resolveEntitlements(o.db, r.ownerId, now)).database.sizeBytes || DATABASE_LIMITS.sizeBytes);
     const ratio = size / limit;
     const current = r.writeMode as DatabaseWriteMode;
     const mode = targetWriteMode(ratio, current);

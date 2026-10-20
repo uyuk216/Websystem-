@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { accessLogs, accounts, apps, deployments } from '../src/db/schema.js';
 import { ensureAccountOwner } from '../src/teams/teams.js';
+import { giveStudent } from './helpers/grants.js';
 import { createApp } from '../src/apps/apps.js';
 import { createApp as createHttpApp } from '../src/http/app.js';
 import { createFakeMailer } from './helpers/fake-mailer.js';
@@ -14,6 +15,7 @@ const KEY = Buffer.alloc(32, 7);
 let n = 0;
 async function acct(db: TestDb) {
   const [a] = await db.insert(accounts).values({ emailHash: `l${n++}`, emailEnc: 'e', displayName: 'A', locale: 'ja', adultFrom: '2030-01' }).returning();
+  await giveStudent(db, a!.id);
   return { id: a!.id, ownerId: await ensureAccountOwner(db, a!.id) };
 }
 async function mkApp(db: TestDb, a: { id: string; ownerId: string }, name: string) {

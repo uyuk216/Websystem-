@@ -7,6 +7,7 @@ import type { RuntimeDriver } from 'platform';
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { accounts, apps, deployments, runtimeMinutes, runtimeUsage } from '../src/db/schema.js';
 import { ensureAccountOwner } from '../src/teams/teams.js';
+import { giveStudent } from './helpers/grants.js';
 import { rollback } from '../src/apps/deployments.js';
 import { rolloutDynamic, type DynamicRuntime } from '../src/ingest/dynamic.js';
 import { MONTHLY_LIMIT_MINUTES, jstMonthKey, purgeRuntimeMinutes, startRuntimeMetering } from '../src/usage/runtime-hours.js';
@@ -18,6 +19,7 @@ afterEach(() => { for (const s of servers.splice(0)) s.close(); });
 async function setup(db: TestDb, blocked: boolean) {
   const [a] = await db.insert(accounts).values({ emailHash: `ri${n++}`, emailEnc: 'e', displayName: 'A', locale: 'ja', adultFrom: '2030-01' }).returning();
   const ownerId = await ensureAccountOwner(db, a!.id);
+  await giveStudent(db, a!.id);
   const [app] = await db.insert(apps).values({ ownerId, name: `ri-${n}`, kind: 'dynamic' }).returning();
   const [live] = await db.insert(deployments).values({ appId: app!.id, source: 'upload', status: 'live', sourceKey: 's', imageRef: 'img:live' }).returning();
   await db.update(apps).set({ activeDeploymentId: live!.id }).where(eq(apps.id, app!.id));

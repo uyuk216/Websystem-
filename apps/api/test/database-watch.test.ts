@@ -7,6 +7,7 @@ import { createFakeMailer } from './helpers/fake-mailer.js';
 import { accounts, appDatabases } from '../src/db/schema.js';
 import { encryptEmail } from '../src/crypto/email.js';
 import { ensureAccountOwner } from '../src/teams/teams.js';
+import { giveStudent } from './helpers/grants.js';
 import { createApp } from '../src/apps/apps.js';
 import { checkDatabaseSizes, targetWriteMode } from '../src/apps/database-watch.js';
 
@@ -17,6 +18,7 @@ async function setup(db: TestDb) {
   const email = `w${randomUUID().slice(0, 8)}@x.y`;
   const [a] = await db.insert(accounts).values({ emailHash: randomUUID(), emailEnc: encryptEmail(email, emailKey), displayName: 'A', locale: 'ja', adultFrom: '2030-01' }).returning();
   const ownerId = await ensureAccountOwner(db, a!.id);
+  await giveStudent(db, a!.id);
   const { appId } = await createApp(db, a!.id, { name: `w-${randomUUID().slice(0, 8)}`, ownerId, kind: 'dynamic' }) as { appId: string };
   await db.insert(appDatabases).values({ appId, passwordEnc: 'x', status: 'ready' });
   return { appId, email };

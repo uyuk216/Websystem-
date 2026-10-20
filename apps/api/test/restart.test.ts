@@ -7,6 +7,7 @@ import type { RuntimeDriver } from 'platform';
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { accounts, apps, deployments } from '../src/db/schema.js';
 import { ensureAccountOwner } from '../src/teams/teams.js';
+import { giveStudent } from './helpers/grants.js';
 import { createApp } from '../src/apps/apps.js';
 import { restart } from '../src/apps/deployments.js';
 import { setEnvVar } from '../src/apps/env-vars.js';
@@ -34,6 +35,7 @@ function fake(healthy: boolean) {
 async function setup(db: TestDb, kind: 'static' | 'dynamic', active = true) {
   const [a] = await db.insert(accounts).values({ emailHash: `rs${n++}`, emailEnc: 'e', displayName: 'A', locale: 'ja', adultFrom: '2030-01' }).returning();
   const ownerId = await ensureAccountOwner(db, a!.id);
+  await giveStudent(db, a!.id);
   const r = await createApp(db, a!.id, { name: `rs-${randomUUID().slice(0, 8)}`, ownerId, kind }) as { appId: string };
   if (active) {
     const [d] = await db.insert(deployments).values({ appId: r.appId, source: 'upload', status: 'live', sourceKey: 'k', imageRef: 'img:1' }).returning();

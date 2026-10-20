@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { databaseNames, databaseUrl, type DatabaseDriver } from 'platform';
-import { DATABASE_LIMITS } from 'shared';
 import { withAccount, withSystem, type Db } from '../db/client.js';
 import { appDatabases, apps } from '../db/schema.js';
+import { resolveEntitlements } from '../grants/entitlements.js';
 import { mayManage } from './apps.js';
 import { decryptEnvValue, encryptEnvValue, getAppEnvForRun } from './env-vars.js';
 
@@ -17,7 +17,7 @@ export interface DatabaseRuntime {
   databases?: DatabaseDriver;
 }
 
-export type DatabaseError = 'not_found' | 'forbidden' | 'not_dynamic' | 'exists' | 'unavailable' | 'failed';
+export type DatabaseError = 'not_found' | 'forbidden' | 'not_dynamic' | 'exists' | 'unavailable' | 'failed' | 'plan_required';
 
 export interface DatabaseView {
   status: 'creating' | 'ready' | 'failed';
@@ -40,6 +40,9 @@ async function managedApp(db: Db, accountId: string, appId: string) {
 
 export async function getDatabase(db: Db, accountId: string, appId: string): Promise<{ database: DatabaseView | null } | { error: 'not_found' }> {
   if (!UUID.test(appId)) return { error: 'not_found' };
+  const seen = await withAccount(db, accountId, async (tx) => (await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId)))[0] ?? null);
+  if (!seen) return { error: 'not_found' };
+  const limitBytes = (await resolveEntitlements(db, seen.ownerId)).database.sizeBytes;
   return withAccount(db, accountId, async (tx) => {
     const [a] = await tx.select({ id: apps.id }).from(apps).where(eq(apps.id, appId));
     if (!a) return { error: 'not_found' as const };
@@ -47,7 +50,7 @@ export async function getDatabase(db: Db, accountId: string, appId: string): Pro
     if (!d) return { database: null };
     return {
       database: {
-        status: d.status as DatabaseView['status'], sizeBytes: d.sizeBytes, limitBytes: DATABASE_LIMITS.sizeBytes,
+        status: d.status as DatabaseView['status'], sizeBytes: d.sizeBytes, limitBytes,
         writeMode: d.writeMode as DatabaseView['writeMode'], checkedAt: d.checkedAt, createdAt: d.createdAt,
       },
     };
@@ -63,6 +66,8 @@ export async function addDatabase(db: Db, rt: DatabaseRuntime | undefined, accou
   if ('error' in a) return a;
   if (a.kind !== 'dynamic') return { error: 'not_dynamic' };
   if (!rt?.databases) return { error: 'unavailable' };
+  const ent = await resolveEntitlements(db, a.ownerId);
+  if (ent.dynamic.appsPerOwner === 0) return { error: 'plan_required' };
   const password = randomBytes(24).toString('base64url');
   const passwordEnc = encryptEnvValue(password, rt.envKey, appId, SECRET_NAME);
   const claimed = await withAccount(db, accountId, async (tx) => {
@@ -78,7 +83,7 @@ export async function addDatabase(db: Db, rt: DatabaseRuntime | undefined, accou
   if (!claimed) return { error: 'exists' };
   const { database, user } = databaseNames(appId);
   try {
-    await rt.databases.create({ appId, ownerId: a.ownerId, database, user, password, limits: { connections: DATABASE_LIMITS.connections, memoryMb: DATABASE_LIMITS.memoryMb } });
+    await rt.databases.create({ appId, ownerId: a.ownerId, database, user, password, limits: { connections: ent.database.connections, memoryMb: ent.database.memoryMb } });
   } catch (e) {
     console.error('database create failed', appId, e);
     await withSystem(db, (tx) => tx.update(appDatabases).set({ status: 'failed' }).where(eq(appDatabases.appId, appId)));

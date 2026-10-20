@@ -8,6 +8,7 @@ import { Waker, type AppRunSpec, type RuntimeDriver, type RuntimeStatus } from '
 import { withTestDb, type TestDb } from '../../api/test/helpers/db.js';
 import { accounts, apps, deployments, runtimeUsage } from '../../api/src/db/schema.js';
 import { ensureAccountOwner } from '../../api/src/teams/teams.js';
+import { giveStudent } from '../../api/test/helpers/grants.js';
 import { createApp } from '../../api/src/apps/apps.js';
 import { jstMonthKey, MONTHLY_LIMIT_MINUTES } from '../../api/src/usage/runtime-hours.js';
 import { sleepIdleApps } from '../../api/src/apps/wake.js';
@@ -62,6 +63,7 @@ let n = 0;
 async function dynamicApp(db: TestDb, name = 'dyn-app') {
   const [a] = await db.insert(accounts).values({ emailHash: `d${n++}`, emailEnc: 'e', displayName: 'A', locale: 'ja', adultFrom: '2030-01' }).returning();
   const ownerId = await ensureAccountOwner(db, a!.id);
+  await giveStudent(db, a!.id);
   const { appId } = (await createApp(db, a!.id, { name, ownerId })) as { appId: string };
   const [d] = await db.insert(deployments).values({ appId, source: 'upload', status: 'live', sourceKey: 's', imageRef: `ys/${appId}:x` }).returning();
   await db.update(apps).set({ kind: 'dynamic', activeDeploymentId: d!.id }).where(eq(apps.id, appId));

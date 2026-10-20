@@ -6,6 +6,7 @@ import { DockerDatabaseDriver, DockerDriver } from 'platform';
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { accounts, appDatabases } from '../src/db/schema.js';
 import { ensureAccountOwner } from '../src/teams/teams.js';
+import { giveStudent } from './helpers/grants.js';
 import { createApp } from '../src/apps/apps.js';
 import { setEnvVar } from '../src/apps/env-vars.js';
 import { addDatabase, getDatabase, getRunInputs, removeDatabase } from '../src/apps/databases.js';
@@ -23,6 +24,7 @@ let n = 0;
 async function setup(db: TestDb, kind: 'static' | 'dynamic' = 'dynamic') {
   const [a] = await db.insert(accounts).values({ emailHash: `dbt${n++}-${randomUUID()}`, emailEnc: 'e', displayName: 'A', locale: 'ja', adultFrom: '2030-01' }).returning();
   const ownerId = await ensureAccountOwner(db, a!.id);
+  await giveStudent(db, a!.id);
   const r = await createApp(db, a!.id, { name: `db-${randomUUID().slice(0, 8)}`, ownerId, kind }) as { appId: string };
   cleanup.push(r.appId);
   return { accountId: a!.id, appId: r.appId, ownerId };

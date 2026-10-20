@@ -263,14 +263,17 @@ describe('audit log (Review Focus 5)', () => {
     const { call } = build(db);
     const co = `asid=${await login(call, owner)}`;
     const cr = `asid=${await login(call, rev)}`;
-    expect((await call('/admin/settings/limits.dynamic', { method: 'PUT', login: owner.login, cookie: co, body: { value: { apps: 2 } } })).status).toBe(200);
-    expect((await call('/admin/settings/limits.dynamic', { method: 'PUT', login: owner.login, cookie: co, body: { value: { apps: 3 } } })).status).toBe(200);
-    expect((await call('/admin/settings/limits.dynamic', { method: 'PUT', login: rev.login, cookie: cr, body: { value: { apps: 99 } } })).status).toBe(403);
+    expect((await call('/admin/settings/limits.dynamic.appsPerOwner', { method: 'PUT', login: owner.login, cookie: co, body: { value: 2 } })).status).toBe(200);
+    expect((await call('/admin/settings/limits.dynamic.appsPerOwner', { method: 'PUT', login: owner.login, cookie: co, body: { value: 3 } })).status).toBe(200);
+    expect((await call('/admin/settings/limits.dynamic.appsPerOwner', { method: 'PUT', login: rev.login, cookie: cr, body: { value: 99 } })).status).toBe(403);
     expect((await call('/admin/settings/bad key', { method: 'PUT', login: owner.login, cookie: co, body: { value: 1 } })).status).toBe(400);
     const [s] = await db.select().from(platformSettings);
-    expect(s!.value).toEqual({ apps: 3 });
+    expect(s!.value).toEqual(3);
     const changed = (await db.select().from(adminAuditLog).where(eq(adminAuditLog.action, 'settings.changed')).orderBy(adminAuditLog.seq)).map((r) => r.detail);
-    expect(changed).toEqual([{ before: null, after: { apps: 2 } }, { before: { apps: 2 }, after: { apps: 3 } }]);
+    expect(changed).toEqual([{ before: null, after: 2 }, { before: 2, after: 3 }]);
+    // Unknown limit keys and non-numeric values are refused (they would silently do nothing).
+    expect((await call('/admin/settings/limits.dynamic.nope', { method: 'PUT', login: owner.login, cookie: co, body: { value: 1 } })).status).toBe(400);
+    expect((await call('/admin/settings/limits.dynamic.appsPerOwner', { method: 'PUT', login: owner.login, cookie: co, body: { value: -1 } })).status).toBe(400);
     // The HTTP API reports the chain as intact, and notices tampering.
     expect(await (await call('/admin/audit/verify', { login: owner.login, cookie: co })).json()).toEqual({ ok: true, firstBadSeq: null });
     const list = await (await call('/admin/audit?limit=3', { login: owner.login, cookie: co })).json() as { entries: unknown[] };
