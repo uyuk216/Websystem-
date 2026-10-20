@@ -7,3 +7,4 @@ export { STATIC_LIMITS, DYNAMIC_LIMITS, DATABASE_LIMITS } from './plans.js';
 export { validateAppName, APP_NAME_RE } from './app-name.js';
 export type { AppNameCheck } from './app-name.js';
 export { RESERVED_APP_NAMES } from './reserved-names.js';
+export * from './idcrypt/index.js';
