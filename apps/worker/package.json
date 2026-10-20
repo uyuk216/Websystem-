@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/main.ts",
-    "ensure-buckets": "node --env-file-if-exists=../../.env.development --import tsx src/ensure-buckets.ts",
-    "start": "node --env-file-if-exists=../../.env.development --import tsx src/main.ts",
+    "dev": "node --env-file-if-exists=../../.env.development --env-file-if-exists=../../.env.pii.development --import tsx --watch src/main.ts",
+    "ensure-buckets": "node --env-file-if-exists=../../.env.development --env-file-if-exists=../../.env.pii.development --import tsx src/ensure-buckets.ts",
+    "start": "node --env-file-if-exists=../../.env.development --env-file-if-exists=../../.env.pii.development --import tsx src/main.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."

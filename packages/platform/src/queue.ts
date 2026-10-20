@@ -5,6 +5,8 @@ export type { PgBoss };
 export const JOBS = {
   processDeployment: 'deployment.process',
   deleteAppStorage: 'app.delete-storage',
+  /** 毎時: 学生証の暗号文の期限切れ・孤児の掃除（Task 4）。 */
+  verificationPurge: 'verification.purge',
 } as const;
 /** Retries for deployment processing (pg-boss retryLimit); the last attempt records the failure. */
 export const DEPLOY_RETRY_LIMIT = 3;

@@ -1,4 +1,4 @@
-import { createQueue, createStorage, loadStorageConfig, startQueue } from 'platform';
+import { createIdBlobStore, createPiiPool, createQueue, createStorage, JOBS, loadStorageConfig, startQueue } from 'platform';
 import { createDb } from 'api/db';
 import { sweepStaleDeployments } from 'api/publish';
 import { createDynamicRuntime } from 'api/dynamic';
@@ -19,8 +19,17 @@ const locker = runtime ? createWakeLocker(databaseUrl, 4) : undefined;
 if (runtime && locker) runtime.lock = locker.lock;
 const storage = createStorage(loadStorageConfig(process.env));
 await storage.ensureBuckets();
+const emailKey = process.env.EMAIL_ENC_KEY ? Buffer.from(process.env.EMAIL_ENC_KEY, 'base64') : undefined;
+const mailer = process.env.SMTP_URL ? createMailer(process.env.SMTP_URL, process.env.MAIL_FROM || 'no-reply@localhost') : undefined;
+// 学生証の暗号文を消す接続（pii_admin）。ワーカーだけが持つ（apps/api は持たない）。無ければ掃除ジョブは何もしない。
+const piiUrl = process.env.PII_ADMIN_DATABASE_URL;
+const piiSql = piiUrl ? createPiiPool(piiUrl, { max: 2 }) : undefined;
+const verification = piiSql ? { store: createIdBlobStore(piiSql), mailer, emailKey } : undefined;
+if (!verification) console.warn('worker: PII_ADMIN_DATABASE_URL is not set; verification purge is disabled');
 const boss = await startQueue(createQueue(databaseUrl));
-await registerHandlers(boss, defaultHandlers({ db, storage, runtime }));
+await registerHandlers(boss, defaultHandlers({ db, storage, runtime, verification }));
+// 毎時 0 分: 期限切れの暗号文と孤児の掃除（複数のワーカーがいても pg-boss が 1 回だけ配る）。
+if (verification) await boss.schedule(JOBS.verificationPurge, '0 * * * *');
 
 // Stale `queued` deployments (never enqueued, or the enqueuing process died) are failed at startup and every 10 minutes.
 const sweep = () => sweepStaleDeployments(db).then((n) => { if (n > 0) console.log(`worker: failed ${n} stale queued deployment(s)`); }, (e: unknown) => console.error('worker: stale sweep failed', e));
@@ -38,8 +47,6 @@ if (runtime) {
 
 // Runtime-hour metering: one tick per minute (idempotent per app-minute, so several workers do not double count).
 if (runtime) {
-  const emailKey = process.env.EMAIL_ENC_KEY ? Buffer.from(process.env.EMAIL_ENC_KEY, 'base64') : undefined;
-  const mailer = process.env.SMTP_URL ? createMailer(process.env.SMTP_URL, process.env.MAIL_FROM || 'no-reply@localhost') : undefined;
   startRuntimeMetering({ db, driver: runtime.driver, mailer, emailKey });
   // User databases: size check every 5 minutes (80% mail, read-only at 100%, refused beyond the hard limit).
   if (runtime.databases) {
@@ -56,6 +63,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
       void locker?.close();
       storage.close();
       void sql.end();
+      void piiSql?.end();
       process.exit(0);
     });
   });

@@ -22,3 +22,14 @@
 - 検証: Playwright（`pnpm --filter upload e2e`、実 Chromium）で、送信は封筒の POST 1 回のみ・同一オリジン・平文の断片なし・Node で復号できることを確認（**Task 2 で未実施だったブラウザ⇔Node の相互復号もここで完了**）。CSP 違反の警告もなし。
 - 配線メモ: `apps/upload` の `node_modules` は pnpm install をせず、既存パッケージへのリンクを手で作成し `pnpm-lock.yaml` に importer を追記（`--frozen-lockfile` 検証済み、新規パッケージなし）。クリーン環境では `pnpm install` で同じ状態になる。`.env.development(.example)` に `UPLOAD_ORIGIN`・`INGEST_SHARED_SECRET`（開発用ダミー）を追加。`ID_RECIPIENT_PUBLIC_KEY` は `pnpm --filter upload keygen` で作る。
 - 未実施・持ち越し: 実際の API ⇔ 取り込み口 ⇔ 個人情報 DB を通した結合は未確認（各部分は個別テスト済み）。トークン消費後に PII への書き込みが失敗した場合は再度「提出を始める」必要があり、残った `verification_uploads` は Task 4 の `purge` で掃除する。7 日での `expired` 化・暗号文削除・再提出メールは Task 4。ルートの `dev` スクリプトには `upload` を追加していない。
+
+### Task 4: 審査の流れと自動削除 — 実装済み（未コミット）
+- 追加: `platform/verification/{provider,manual}.ts`（`VerificationProvider`、`ManualProvider` が審査待ちキュー、`FakeProvider` は決定を記録する差し替え確認用）、`shared/verification-rules.ts`（JST。1〜2 月は今年度、3 月は卒業予定年で翌年度の在学を判定、4 月以降は新年度の書類の確認を要求。有効期限は 3/31、3 月以降の承認は翌年の 3/31）。
+- `apps/api/src/verification/review.ts`（`approveVerification` / `rejectVerification` / `listPendingReviews`）：承認 = `approved` + 有効期限 + `grantStudent` + 暗号文の削除を 1 トランザクション。削除は最後に行い、失敗または暗号文なしなら例外で全体を巻き戻す（承認されない・付与もメールもなし）。削除後にコミットが失敗した場合も、残るのは「暗号文なしで審査待ち」で画像は残らない。差し戻しは理由をメールし暗号文を削除、再提出可。
+- **`grantStudent` は Task 6 が未実装のため注入式**（`GrantStudent = (tx, accountId, validUntil) => Promise<void>`）。Task 6 で本物を渡す。呼び出し元（管理画面 API）は Task 5/10。
+- `purge.ts`：期限切れ（提出から 7 日）→ `expired` + 暗号文削除 + 再提出メール（削除に失敗したら expired にせず次回再試行）、孤児の暗号文（決定済み／本体 DB に行なし（1 時間の猶予）／暗号文自身の期限切れ）の掃除、未使用トークン行の削除。`scripts/purge.ts` には未使用トークンの掃除だけ追加（apps/api は個人情報 DB に接続しないため暗号文は触れない）。
+- apps/api は個人情報 DB を知らない構成を維持：削除側は `IdBlobStore` インターフェース（`api/verification/blob-store.ts`）を注入、実体は `platform/pii/store.ts` の `createIdBlobStore`（`pii_admin` 接続、審査の記録の追記と暗号文の削除は同一トランザクション）。`pii-isolation` テストは通る。
+- ワーカー：ジョブ `verification.purge`（`JOBS.verificationPurge`）を毎時 0 分に `boss.schedule`。`PII_ADMIN_DATABASE_URL` が無ければ警告して無効（`apps/worker` の起動スクリプトが `.env.pii.development` も読む）。
+- バックアップ除外：`drizzle-pii/0001_backup_exclude.sql` で `student_id_blobs` に `COMMENT 'backup:exclude'`、`PII_BACKUP_EXCLUDED_TABLES`、`dev/pii-backup.sh`（目印のあるテーブルは `--exclude-table-data`）。実物の pg_dump 出力に暗号文が含まれないことをテストで確認（コンテナ内の pg_dump を使用）。**既存の dev DB には `pnpm --filter platform pii:migrate` が必要**。
+- テスト: `shared/test/verification-rules`、`platform/test/{pii/store,verification-provider}`、`api/test/verification-review`（メモリ上のストア、遷移・原子性・期限切れ・孤児）、`worker/test/verification`（本体 DB + 個人情報 DB の実物で、提出 → 承認／差し戻し／削除失敗（権限を外して再現）／ワーカーのジョブ）。
+- 持ち越し: 承認・差し戻しを呼ぶ管理画面の API と、画像の復号表示は Task 5/10。`SMS` 等は対象外。

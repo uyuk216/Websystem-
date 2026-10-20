@@ -326,4 +326,10 @@ export const ja = {
   'upload.errorNetwork': '送信できませんでした。通信状況を確認して、もう一度お試しください。',
   'upload.errorUnavailable': '現在ご利用いただけません。しばらくしてからお試しください。',
   'upload.noFile': '画像を選んでください。',
+  'verification.approvedSubject': '学生認証が承認されました',
+  'verification.approvedBody': '学生証の審査が完了し、Student が有効になりました（{validUntil} まで有効）。提出された画像は審査後ただちに削除しました。',
+  'verification.rejectedSubject': '学生認証が承認されませんでした',
+  'verification.rejectedBody': '学生証の審査の結果、承認できませんでした。理由: {reason}\n提出された画像は削除しました。内容をご確認のうえ、アカウントの画面からもう一度提出できます。',
+  'verification.expiredSubject': '学生認証の提出の期限が切れました',
+  'verification.expiredBody': '提出から 7 日以内に審査が完了しなかったため、提出された画像を削除しました。お手数ですが、アカウントの画面から改めて提出してください。',
 } as const;

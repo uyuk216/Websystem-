@@ -12,3 +12,5 @@ export { SCHOOL_KINDS, UPLOAD_TOKEN_TTL_MS, UPLOAD_RETENTION_MS, validateVerific
 export type { SchoolKind, VerificationInput, VerificationInputError } from './verification.js';
 export { allowAllNetworks, staticNetworkReputation } from './network-reputation.js';
 export type { NetworkReputation, NetworkVerdict } from './network-reputation.js';
+export { endOfMarchJst, assessEligibility } from './verification-rules.js';
+export type { EligibilityVerdict } from './verification-rules.js';

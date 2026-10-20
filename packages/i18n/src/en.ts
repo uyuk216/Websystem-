@@ -328,4 +328,10 @@ export const en = {
   'upload.errorNetwork': 'Could not send. Please check your connection and try again.',
   'upload.errorUnavailable': 'This service is unavailable right now. Please try again later.',
   'upload.noFile': 'Please choose an image.',
+  'verification.approvedSubject': 'Your student verification was approved',
+  'verification.approvedBody': 'Your student ID review is complete and Student is now active (valid until {validUntil}). The submitted image was deleted right after the review.',
+  'verification.rejectedSubject': 'Your student verification was not approved',
+  'verification.rejectedBody': 'We could not approve your student ID. Reason: {reason}\nThe submitted image has been deleted. You can submit again from your account page.',
+  'verification.expiredSubject': 'Your student verification submission expired',
+  'verification.expiredBody': 'The review was not completed within 7 days of your submission, so the submitted image has been deleted. Please submit again from your account page.',
 } satisfies Record<keyof typeof ja, string>;

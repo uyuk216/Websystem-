@@ -20,3 +20,7 @@ export interface VerificationReviewRow {
   result: 'approved' | 'rejected';
   reviewed_at: Date;
 }
+
+/** バックアップ対象外のテーブル（暗号文は審査後すぐ消えるため、バックアップに残さない）。DB 側でもテーブルのコメントに目印を付ける。 */
+export const PII_BACKUP_EXCLUDED_TABLES = ['student_id_blobs'] as const;
+export const PII_BACKUP_EXCLUDE_MARKER = 'backup:exclude';

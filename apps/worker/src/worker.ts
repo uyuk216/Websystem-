@@ -1,19 +1,31 @@
 import { deleteAppStorage, processDeployment } from 'api/publish';
 import type { DynamicRuntime } from 'api/dynamic';
 import type { Db } from 'api/db';
+import { purgeVerifications } from 'api/verification-purge';
+import type { IdBlobStore } from 'api/verification-purge';
+import type { Mailer } from 'api/mailer';
 import { DEPLOY_RETRY_LIMIT, JOBS, type JobName, type PgBoss, type Storage } from 'platform';
 
 export type JobHandler = (data: unknown, ctx?: { lastAttempt: boolean }) => Promise<void>;
 export type Handlers = Record<JobName, JobHandler>;
 
 /** Job handlers. (Transfer counters are flushed by the static server itself, not by a job.) */
-export function defaultHandlers(deps?: { db: Db; storage: Storage; runtime?: DynamicRuntime }): Handlers {
+export interface WorkerDeps {
+  db: Db;
+  storage: Storage;
+  runtime?: DynamicRuntime;
+  /** 学生証の暗号文を消す口。個人情報 DB の接続がないときは渡さない（掃除はスキップ）。 */
+  verification?: { store: IdBlobStore; mailer?: Mailer; emailKey?: Buffer };
+}
+
+export function defaultHandlers(deps?: WorkerDeps): Handlers {
   const todo = (name: string): JobHandler => async () => {
     console.warn(`worker: no handler implemented for ${name}`);
   };
   return {
     [JOBS.processDeployment]: deps ? makeProcessDeployment(deps) : todo(JOBS.processDeployment),
     [JOBS.deleteAppStorage]: deps ? makeDeleteAppStorage(deps) : todo(JOBS.deleteAppStorage),
+    [JOBS.verificationPurge]: deps?.verification ? makeVerificationPurge({ db: deps.db, ...deps.verification }) : todo(JOBS.verificationPurge),
   };
 }
 
@@ -29,6 +41,11 @@ const makeProcessDeployment = (d: { db: Db; storage: Storage; runtime?: DynamicR
 const makeDeleteAppStorage = (d: { storage: Storage; runtime?: DynamicRuntime }): JobHandler => async (data) => {
   const id = field(data, 'appId');
   if (id) await deleteAppStorage(d.storage, id, d.runtime);
+};
+
+const makeVerificationPurge = (d: { db: Db; store: IdBlobStore; mailer?: Mailer; emailKey?: Buffer }): JobHandler => async () => {
+  const r = await purgeVerifications(d.db, d);
+  if (r.expired + r.blobsDeleted + r.staleUploads > 0) console.log(`worker: verification purge expired=${r.expired} blobsDeleted=${r.blobsDeleted} staleUploads=${r.staleUploads}`);
 };
 
 /** Registers one handler per job name. The boss must already be started with queues created. */
