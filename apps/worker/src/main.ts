@@ -27,9 +27,11 @@ const piiSql = piiUrl ? createPiiPool(piiUrl, { max: 2 }) : undefined;
 const verification = piiSql ? { store: createIdBlobStore(piiSql), mailer, emailKey } : undefined;
 if (!verification) console.warn('worker: PII_ADMIN_DATABASE_URL is not set; verification purge is disabled');
 const boss = await startQueue(createQueue(databaseUrl));
-await registerHandlers(boss, defaultHandlers({ db, storage, runtime, verification }));
+await registerHandlers(boss, defaultHandlers({ db, storage, runtime, verification, usage: { mailer, emailKey } }));
 // 毎時 0 分: 期限切れの暗号文と孤児の掃除（複数のワーカーがいても pg-boss が 1 回だけ配る）。
 if (verification) await boss.schedule(JOBS.verificationPurge, '0 * * * *');
+// 毎時 5 分: 利用の状態の評価（付与の期限・5/1 の停止・3 月の再登録の案内）。
+await boss.schedule(JOBS.usageEvaluate, '5 * * * *');
 
 // Stale `queued` deployments (never enqueued, or the enqueuing process died) are failed at startup and every 10 minutes.
 const sweep = () => sweepStaleDeployments(db).then((n) => { if (n > 0) console.log(`worker: failed ${n} stale queued deployment(s)`); }, (e: unknown) => console.error('worker: stale sweep failed', e));

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { expect, type Page } from '@playwright/test';
 
 const MAILPIT = 'http://localhost:8025/api/v1';
@@ -53,4 +54,12 @@ export async function loginWithCode(page: Page, email: string): Promise<void> {
   await page.locator('#code').fill(codeOf(await nextMail(email)));
   await page.locator('form button[type=submit]').click();
   await page.waitForURL(/settings\/devices/);
+}
+
+/**
+ * Gives the account a Student grant (dev tool, no ID review). Since phase 5 an account without a grant gets
+ * `plan_required` for dynamic apps and databases, so the tests that create those call this after signing up.
+ */
+export function grantStudent(email: string): void {
+  execFileSync('pnpm', ['--filter', 'api', 'admin:grant-student', email], { stdio: 'pipe' });
 }

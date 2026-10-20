@@ -18,7 +18,8 @@
     "./database-watch": "./src/apps/database-watch.ts",
     "./database-backups": "./src/apps/database-backups.ts",
     "./verification-purge": "./src/verification/purge.ts",
-    "./verification-review": "./src/verification/review.ts"
+    "./verification-review": "./src/verification/review.ts",
+    "./usage-state": "./src/usage/state.ts"
   },
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/server.ts",
@@ -26,6 +27,7 @@
     "db:generate": "drizzle-kit generate",
     "admin:purge": "node --env-file-if-exists=../../.env.development --import tsx src/scripts/purge.ts",
     "admin:purge-login-events": "pnpm admin:purge",
+    "admin:grant-student": "node --env-file-if-exists=../../.env.development --import tsx src/scripts/grant-student.ts",
     "admin:approve-recovery": "node --env-file-if-exists=../../.env.development --import tsx src/scripts/approve-recovery.ts",
     "db:migrate": "node --env-file-if-exists=../../.env.development --import tsx src/db/migrate.ts",
     "test": "vitest run",

@@ -1,11 +1,13 @@
 import { expect, test } from '@playwright/test';
-import { newEmail, signUp } from './helpers';
+import { grantStudent, newEmail, signUp } from './helpers';
 
 const appName = () => `e2e-db-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 
 test('dynamic app database: add, back up, delete (password never shown)', async ({ page }) => {
   test.setTimeout(120_000);
-  await signUp(page, newEmail(), 'en');
+  const email = newEmail();
+  await signUp(page, email, 'en');
+  grantStudent(email);
   const name = appName();
   await page.goto('/en/apps');
   await page.getByLabel('App name (subdomain)').fill(name);

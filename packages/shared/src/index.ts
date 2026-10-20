@@ -16,3 +16,5 @@ export { allowAllNetworks, staticNetworkReputation } from './network-reputation.
 export type { NetworkReputation, NetworkVerdict } from './network-reputation.js';
 export { endOfMarchJst, assessEligibility } from './verification-rules.js';
 export type { EligibilityVerdict } from './verification-rules.js';
+export { USAGE_STATES, USAGE_REASONS, USAGE_EVENTS, TIME_REASONS, stateOf, isStoppedState, isTimeEvent, timeReasonFor, applyUsageEvent, nextEvaluationAt, reregistrationFiscalKey } from './usage-state.js';
+export type { UsageState, UsageReason, UsageEvent, GrantFacts, UsageSnapshot } from './usage-state.js';

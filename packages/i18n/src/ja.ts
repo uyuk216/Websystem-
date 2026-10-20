@@ -332,4 +332,12 @@ export const ja = {
   'verification.rejectedBody': '学生証の審査の結果、承認できませんでした。理由: {reason}\n提出された画像は削除しました。内容をご確認のうえ、アカウントの画面からもう一度提出できます。',
   'verification.expiredSubject': '学生認証の提出の期限が切れました',
   'verification.expiredBody': '提出から 7 日以内に審査が完了しなかったため、提出された画像を削除しました。お手数ですが、アカウントの画面から改めて提出してください。',
+  'usage.graceSubject': 'Student の有効期限が切れました（4 月末まで猶予があります）',
+  'usage.graceBody': 'Student の有効期限が切れました。{suspendOn}までは動的アプリをそのまま使えます。引き続き使う場合は、学生証の審査をもう一度受けてください。データは削除しません。',
+  'usage.suspendedSubject': '動的アプリを停止しました',
+  'usage.suspendedBody': '再登録がなかったため、動的アプリを停止しました（データ・イメージは削除していません）。再登録が承認されると、アプリは次のアクセスで自動的に再開します。',
+  'usage.reregisterSubject': '翌年度の再登録の受付を始めました',
+  'usage.reregisterBody': '翌年度も Student を使う場合は、{deadline}までに学生証の審査をもう一度受けてください。受付はアカウントの画面から行えます。',
+  'usage.graduatedSubject': '卒業予定年を過ぎた方へのご案内',
+  'usage.graduatedBody': '登録されている卒業予定年（{year} 年）を過ぎました。引き続き在学中の場合は、{deadline}までに在学証明書などで再登録してください。再登録がない場合、{deadline}に動的アプリを停止します（データは削除しません）。',
 } as const;

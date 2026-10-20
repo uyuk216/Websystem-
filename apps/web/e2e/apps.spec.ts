@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { newEmail, signUp } from './helpers';
+import { grantStudent, newEmail, signUp } from './helpers';
 import { randomBytes } from 'node:crypto';
 import { makeZip } from './zip';
 
@@ -106,7 +106,9 @@ test('GitHub form submits and asks to connect GitHub first', async ({ page }) =>
 });
 
 test('dynamic app: set env var (value never shown), list, delete', async ({ page }) => {
-  await signUp(page, newEmail(), 'en');
+  const email = newEmail();
+  await signUp(page, email, 'en');
+  grantStudent(email);
   const name = appName();
   await page.goto('/en/apps');
   await page.getByLabel('App name (subdomain)').fill(name);

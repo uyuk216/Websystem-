@@ -2,10 +2,12 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { t } from 'i18n';
 import { DYNAMIC_LIMITS } from 'shared';
 import type { RuntimeDriver } from 'platform';
-import { withAccount, withSystem, type Db } from '../db/client.js';
+import { withAccount, withSystem, type Db, type Tx } from '../db/client.js';
 import { apps, runtimeMinutes, runtimeUsage } from '../db/schema.js';
 import { UUID } from '../auth/cross-device.js';
 import { resolveEntitlements } from '../grants/entitlements.js';
+import { isStoppedState } from 'shared';
+import { readUsageState } from './state.js';
 import type { Mailer } from '../mail/mailer.js';
 import { ownerContact } from './owner-contact.js';
 
@@ -51,6 +53,16 @@ function periodsAt(at: Date, limits: { monthly: number; fiscal: number } = { mon
 }
 const planLimits = (e: { dynamic: { monthlyHours: number; fiscalYearHours: number } }) => ({ monthly: e.dynamic.monthlyHours * 60, fiscal: e.dynamic.fiscalYearHours * 60 });
 
+/**
+ * 稼働時間の上限と、利用の状態（Task 7）による停止。付与が切れた「猶予」の間は、動かしたまま前のプラン（Student）の上限で数える。
+ * 停止・ブロック・凍結の間は `blocked`（上限の残りに関係なく動かさない）。
+ */
+async function runtimePlan(db: Db | Tx, ownerId: string, at: Date): Promise<{ limits: { monthly: number; fiscal: number }; blocked: boolean }> {
+  const e = await resolveEntitlements(db, ownerId, at);
+  const state = await readUsageState(db, ownerId);
+  return { limits: planLimits(e.plan === 'none' && state === 'grace' ? { dynamic: DYNAMIC_LIMITS } : e), blocked: isStoppedState(state) };
+}
+
 export function formatHours(minutes: number): string {
   return `${(minutes / 60).toFixed(1)} h`;
 }
@@ -62,7 +74,10 @@ export function formatHours(minutes: number): string {
 export async function runtimeBlockedUntil(db: Db, ownerId: string, at: Date = new Date()): Promise<Date | null> {
   if (!UUID.test(ownerId)) return null;
   // No grant = the "none" plan = 0 hours: the owner is blocked until the end of the period.
-  const periods = periodsAt(at, planLimits(await resolveEntitlements(db, ownerId, at)));
+  const plan = await runtimePlan(db, ownerId, at);
+  // 停止・ブロック・凍結: 再登録・解除まで（少なくとも今年度いっぱいは）動かさない。
+  if (plan.blocked) return nextFiscalYearStart(at);
+  const periods = periodsAt(at, plan.limits);
   const rows = await withSystem(db, (tx) => tx.select({ period: runtimeUsage.period, minutes: runtimeUsage.minutes })
     .from(runtimeUsage).where(and(eq(runtimeUsage.ownerId, ownerId), inArray(runtimeUsage.period, periods.map((p) => p.key)))));
   let until: Date | null = null;
@@ -98,7 +113,7 @@ export interface MeterRuntimeOptions {
   now?: () => Date;
 }
 
-interface Outcome { ownerId: string; period: Period; minutes: number; warn: boolean }
+interface Outcome { ownerId: string; period: Period; minutes: number; warn: boolean; stateBlocked: boolean }
 
 /**
  * Records one tick: for every running app inserts (app, current minute, containers) once, and only when that
@@ -124,7 +139,8 @@ export async function meterRuntime(opts: MeterRuntimeOptions): Promise<number> {
         const [a] = await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId));
         if (!a) return [];
         const out: Outcome[] = [];
-        const periods = periodsAt(minute, planLimits(await resolveEntitlements(tx, a.ownerId, minute)));
+        const plan = await runtimePlan(tx, a.ownerId, minute);
+        const periods = periodsAt(minute, plan.limits);
         for (const p of periods) {
           const [row] = await tx.insert(runtimeUsage).values({ ownerId: a.ownerId, period: p.key, minutes: containers })
             .onConflictDoUpdate({ target: [runtimeUsage.ownerId, runtimeUsage.period], set: { minutes: sql`${runtimeUsage.minutes} + excluded.minutes` } })
@@ -137,7 +153,7 @@ export async function meterRuntime(opts: MeterRuntimeOptions): Promise<number> {
               .returning({ ownerId: runtimeUsage.ownerId });
             warn = flipped.length > 0;
           }
-          out.push({ ownerId: a.ownerId, period: p, minutes: row?.minutes ?? 0, warn });
+          out.push({ ownerId: a.ownerId, period: p, minutes: row?.minutes ?? 0, warn, stateBlocked: plan.blocked });
         }
         return out;
       });
@@ -150,7 +166,7 @@ export async function meterRuntime(opts: MeterRuntimeOptions): Promise<number> {
     if (outcomes.length > 0) recorded++;
     for (const o of outcomes) {
       if (o.warn) notifyOwner(opts, o.ownerId, o.period, o.minutes);
-      if (o.minutes >= o.period.limit) exhausted.add(o.ownerId);
+      if (o.minutes >= o.period.limit || o.stateBlocked) exhausted.add(o.ownerId);
     }
   }
 
@@ -199,7 +215,7 @@ export async function getRuntimeUsage(db: Db, accountId: string, appId: string, 
   if (!UUID.test(appId)) return null;
   const seen = await withAccount(db, accountId, async (tx) => (await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId)))[0] ?? null);
   if (!seen) return null;
-  const [m, fy] = periodsAt(at, planLimits(await resolveEntitlements(db, seen.ownerId, at))) as [Period, Period];
+  const [m, fy] = periodsAt(at, (await runtimePlan(db, seen.ownerId, at)).limits) as [Period, Period];
   return withAccount(db, accountId, async (tx) => {
     const [a] = await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId));
     if (!a) return null;

@@ -397,3 +397,22 @@ export const grants = pgTable('grants', {
   uniqueIndex('grants_student_active_idx').on(t.targetKind, t.targetId).where(sql`${t.kind} = 'student' AND ${t.revokedAt} IS NULL`),
   check('grants_period_check', sql`${t.endsAt} > ${t.startsAt}`),
 ]);
+
+/**
+ * オーナーごとの利用の状態（フェーズ 5 Task 7）。変えるのは `transitionUsageState` だけ。
+ * `reasons` は理由の集合（優先順位 凍結 > ブロック > 停止 > 猶予 > 有効 で `state` が決まる）。
+ * 認証の有効期限（`valid_until` = 3/31）と停止する日（`suspend_on` = 5/1）は別々の列。
+ */
+export const usageStates = pgTable('usage_states', {
+  ownerId: uuid('owner_id').primaryKey().references(() => owners.id, { onDelete: 'cascade' }),
+  state: text('state', { enum: ['active', 'grace', 'suspended', 'blocked', 'frozen'] }).notNull().default('active'),
+  reasons: text('reasons').array().notNull().default(sql`'{}'::text[]`),
+  /** フェーズ 7 の予約: 有料になったオーナーには時間の理由が付かない。 */
+  paid: boolean('paid').notNull().default(false),
+  validUntil: timestamp('valid_until', { withTimezone: true }),
+  suspendOn: timestamp('suspend_on', { withTimezone: true }),
+  nextEvaluateAt: timestamp('next_evaluate_at', { withTimezone: true }),
+  /** 再登録の案内メールを送った年度（'FY2026'）。年度ごとに 1 回だけ。 */
+  reregNotifiedFor: text('rereg_notified_for'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('usage_states_next_idx').on(t.nextEvaluateAt)]);

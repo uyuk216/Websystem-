@@ -18,6 +18,18 @@ const asBoost = (p: unknown): BoostParams => {
 };
 
 /**
+ * オーナー宛ての付与の絞り込み。個人オーナー = そのアカウントの付与とオーナー宛て。チームオーナー = チームの owner ロールのメンバーの付与（チームは彼らのプランを引き継ぐ）とオーナー宛て。
+ */
+export async function ownerGrantFilter(tx: Tx, ownerId: string) {
+  const [o] = await tx.select({ accountId: owners.accountId, teamId: owners.teamId }).from(owners).where(eq(owners.id, ownerId));
+  const accountIds = o?.accountId ? [o.accountId]
+    : o?.teamId ? (await tx.select({ id: teamMembers.accountId }).from(teamMembers).where(and(eq(teamMembers.teamId, o.teamId), eq(teamMembers.role, 'owner')))).map((m) => m.id) : [];
+  return accountIds.length > 0
+    ? or(and(eq(grants.targetKind, 'owner'), eq(grants.targetId, ownerId)), and(eq(grants.targetKind, 'account'), inArray(grants.targetId, accountIds)))
+    : and(eq(grants.targetKind, 'owner'), eq(grants.targetId, ownerId));
+}
+
+/**
  * オーナー（個人 or チーム）の、`at` 時点のプランと上限。付与なし = 「なし」（動的アプリは動かせない）。
  * 付与はアカウント宛て（個人オーナーのとき）とオーナー宛て。有効 = 取り消されておらず `starts_at <= at <= ends_at`（`ends_at` は最後の瞬間。Student は 3/31 23:59:59.999 JST）（期限切れで自動的に「なし」に戻る）。
  * システム側（owner ロール）で読むので、利用者のトランザクション（withAccount）の外から呼ぶこと。
@@ -25,13 +37,7 @@ const asBoost = (p: unknown): BoostParams => {
 export async function resolveEntitlements(db: Db | Tx, ownerId: string, at: Date = new Date()): Promise<Entitlements> {
   const [rows, overrides] = await Promise.all([
     withSystem(db, async (tx) => {
-      const [o] = await tx.select({ accountId: owners.accountId, teamId: owners.teamId }).from(owners).where(eq(owners.id, ownerId));
-      // Personal owner: its account's grants. Team owner: the grants of the team's owner-role members (the team inherits their plan).
-      const accountIds = o?.accountId ? [o.accountId]
-        : o?.teamId ? (await tx.select({ id: teamMembers.accountId }).from(teamMembers).where(and(eq(teamMembers.teamId, o.teamId), eq(teamMembers.role, 'owner')))).map((m) => m.id) : [];
-      const mine = accountIds.length > 0
-        ? or(and(eq(grants.targetKind, 'owner'), eq(grants.targetId, ownerId)), and(eq(grants.targetKind, 'account'), inArray(grants.targetId, accountIds)))
-        : and(eq(grants.targetKind, 'owner'), eq(grants.targetId, ownerId));
+      const mine = await ownerGrantFilter(tx, ownerId);
       return tx.select().from(grants).where(and(mine, isNull(grants.revokedAt), lte(grants.startsAt, at), gte(grants.endsAt, at), inArray(grants.kind, ['student', 'starter', 'event_boost'])));
     }),
     loadLimitOverrides(db),

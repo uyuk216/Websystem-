@@ -334,4 +334,12 @@ export const en = {
   'verification.rejectedBody': 'We could not approve your student ID. Reason: {reason}\nThe submitted image has been deleted. You can submit again from your account page.',
   'verification.expiredSubject': 'Your student verification submission expired',
   'verification.expiredBody': 'The review was not completed within 7 days of your submission, so the submitted image has been deleted. Please submit again from your account page.',
+  'usage.graceSubject': 'Your Student period has ended (grace until the end of April)',
+  'usage.graceBody': 'Your Student period has ended. You can keep using your dynamic apps until {suspendOn}. To continue, please go through the student verification again. Your data will not be deleted.',
+  'usage.suspendedSubject': 'Your dynamic apps were stopped',
+  'usage.suspendedBody': 'Because you did not re-register, your dynamic apps were stopped (data and images were not deleted). Once your re-registration is approved, the apps resume automatically on the next access.',
+  'usage.reregisterSubject': 'Re-registration for next fiscal year is open',
+  'usage.reregisterBody': 'To keep using Student next fiscal year, please go through the student verification again by {deadline}. You can do it from your account page.',
+  'usage.graduatedSubject': 'A note for those past their expected graduation year',
+  'usage.graduatedBody': 'Your registered expected graduation year ({year}) has passed. If you are still enrolled, please re-register with a certificate of enrollment by {deadline}. Without re-registration your dynamic apps are stopped on {deadline} (data is not deleted).',
 } satisfies Record<keyof typeof ja, string>;
