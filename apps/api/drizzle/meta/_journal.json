@@ -183,6 +183,13 @@
       "when": 1792495850612,
       "tag": "0025_student_verifications",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792497072505,
+      "tag": "0026_operators_audit",
+      "breakpoints": true
     }
   ]
 }

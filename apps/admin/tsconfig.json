@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.base.json",
+  // typeRoots: until `pnpm install` links this package's own @types/node, borrow the identical copy from apps/api.
+  "compilerOptions": { "noEmit": true, "lib": ["ES2023", "DOM"], "types": ["node"], "typeRoots": ["./node_modules/@types", "../api/node_modules/@types"] },
+  "include": ["src", "test"]
+}

@@ -312,3 +312,61 @@ export const verificationUploads = pgTable('verification_uploads', {
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   createdAt: createdAt(),
 }, (t) => [index('verification_uploads_verification_idx').on(t.verificationId)]);
+
+/** Operators (phase 5). Admin tables are unreachable from platform_api; only platform_admin (via withAdmin) touches them. */
+export const operators = pgTable('operators', {
+  accountId: uuid('account_id').primaryKey().references(() => accounts.id),
+  /** Lower-cased Tailscale login that `tailscale serve` puts in Tailscale-User-Login. */
+  tailscaleLogin: text('tailscale_login').notNull().unique(),
+  role: text('role', { enum: ['reviewer', 'owner'] }).notNull(),
+  active: boolean('active').notNull().default(true),
+  createdAt: createdAt(),
+});
+
+/** Elevated (passkey-verified) admin sessions: 30 minutes, token stored as a hash. */
+export const adminSessions = pgTable('admin_sessions', {
+  id: id(),
+  operatorId: uuid('operator_id').notNull().references(() => operators.accountId),
+  tokenHash: text('token_hash').notNull().unique(),
+  createdAt: createdAt(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+}, (t) => [index('admin_sessions_operator_idx').on(t.operatorId)]);
+
+/**
+ * Append-only operator action log. UPDATE/DELETE/TRUNCATE are rejected by triggers; `seq`, `prev_hash` and `hash`
+ * are assigned by a BEFORE INSERT trigger (hash chain, verified by admin_audit_verify()).
+ */
+export const adminAuditLog = pgTable('admin_audit_log', {
+  seq: bigint('seq', { mode: 'number' }).primaryKey(),
+  operatorId: uuid('operator_id').notNull().references(() => operators.accountId),
+  action: text('action').notNull(),
+  target: text('target').notNull(),
+  detail: jsonb('detail').notNull().default(sql`'{}'::jsonb`),
+  createdAt: createdAt(),
+  prevHash: text('prev_hash').notNull().default(''),
+  hash: text('hash').notNull().default(''),
+});
+
+/** Platform-wide tunables (limits etc.), editable only from the admin side. */
+export const platformSettings = pgTable('platform_settings', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').notNull(),
+  updatedBy: uuid('updated_by').notNull().references(() => operators.accountId),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Dangerous operations are booked 24 hours ahead, can be cancelled, and notify the owners. */
+export const scheduledDangerousActions = pgTable('scheduled_dangerous_actions', {
+  id: id(),
+  action: text('action').notNull(),
+  target: text('target').notNull(),
+  params: jsonb('params').notNull().default(sql`'{}'::jsonb`),
+  requestedBy: uuid('requested_by').notNull().references(() => operators.accountId),
+  executeAfter: timestamp('execute_after', { withTimezone: true }).notNull(),
+  status: text('status', { enum: ['scheduled', 'executed', 'cancelled'] }).notNull().default('scheduled'),
+  notifiedAt: timestamp('notified_at', { withTimezone: true }),
+  executedAt: timestamp('executed_at', { withTimezone: true }),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+  createdAt: createdAt(),
+}, (t) => [index('scheduled_dangerous_actions_due_idx').on(t.status, t.executeAfter)]);

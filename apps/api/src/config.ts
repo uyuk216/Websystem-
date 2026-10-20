@@ -19,6 +19,15 @@ export interface Config {
   uploadOrigin: string;
   /** Shared secret for the upload intake's token-consume call (INGEST_SHARED_SECRET, >= 32 chars); the internal route is absent when unset. */
   ingestSharedSecret?: string;
+  /** Port / bind address of the separate admin API (never the public app). Bind to the Tailscale interface or loopback behind `tailscale serve`. */
+  adminApiPort: number;
+  adminBind: string;
+  /** Origin the operators' browsers use for the admin UI (WebAuthn expected origin). */
+  adminOrigin: string;
+  /** Requests must come from a Tailscale address with a matching Tailscale-User-Login. Always true in production. */
+  tailscaleRequired: boolean;
+  /** Dev only (ADMIN_DEV_TAILSCALE=1): also accept 127.0.0.1 / ::1 as a Tailscale source. Refused at startup in production. */
+  adminDevTailscale: boolean;
   /** GitHub App settings; present only when all three GITHUB_* variables are set. */
   github?: { appId: string; privateKey: string; webhookSecret: string; clientId: string; clientSecret: string };
 }
@@ -62,6 +71,25 @@ function loadIngestSecret(env: NodeJS.ProcessEnv): string | undefined {
   return v;
 }
 
+function loadAdmin(env: NodeJS.ProcessEnv): Pick<Config, 'adminApiPort' | 'adminBind' | 'adminOrigin' | 'tailscaleRequired' | 'adminDevTailscale'> {
+  const production = env.NODE_ENV === 'production';
+  const adminDevTailscale = env.ADMIN_DEV_TAILSCALE === '1';
+  const tailscaleRequired = env.ADMIN_TAILSCALE_REQUIRED !== '0';
+  // The relaxations exist for local development only; a production start with either set is a misconfiguration.
+  if (production && (adminDevTailscale || !tailscaleRequired)) {
+    throw new Error('ADMIN_DEV_TAILSCALE / ADMIN_TAILSCALE_REQUIRED=0 are not allowed when NODE_ENV=production');
+  }
+  const port = env.ADMIN_API_PORT;
+  if (port && (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535)) throw new Error('ADMIN_API_PORT must be an integer 1-65535');
+  return {
+    adminApiPort: port ? Number(port) : 3002,
+    adminBind: env.ADMIN_BIND || '127.0.0.1',
+    adminOrigin: env.ADMIN_ORIGIN || 'http://localhost:5175',
+    tailscaleRequired,
+    adminDevTailscale,
+  };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   return {
     databaseUrl: required(env, 'DATABASE_URL'),
@@ -79,6 +107,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     authStartLimit: env.AUTH_START_LIMIT && /^\d+$/.test(env.AUTH_START_LIMIT) ? Number(env.AUTH_START_LIMIT) : undefined,
     uploadOrigin: env.UPLOAD_ORIGIN || 'http://localhost:5174',
     ingestSharedSecret: loadIngestSecret(env),
+    ...loadAdmin(env),
     github: loadGithub(env),
   };
 }

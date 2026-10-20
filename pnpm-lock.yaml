@@ -37,6 +37,18 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(vite@7.3.7(@types/node@26.6.5)(tsx@4.23.15))
 
+  apps/admin:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.5
+        version: 26.6.5
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(vite@7.3.7(@types/node@26.6.5)(tsx@4.23.15))
+
   apps/api:
     dependencies:
       '@hono/node-server':
