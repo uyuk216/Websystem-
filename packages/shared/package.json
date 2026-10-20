@@ -4,7 +4,11 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./idcrypt/encrypt": "./src/idcrypt/encrypt.ts",
+    "./idcrypt/envelope": "./src/idcrypt/envelope.ts",
+    "./idcrypt/keys": "./src/idcrypt/keys.ts",
+    "./verification": "./src/verification.ts"
   },
   "scripts": {
     "test": "vitest run",

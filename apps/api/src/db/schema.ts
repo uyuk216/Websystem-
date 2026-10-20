@@ -280,3 +280,35 @@ export const appDatabases = pgTable('app_databases', {
   checkedAt: timestamp('checked_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** Student verification requests (phase 5). Holds no image data: ciphertext lives only in the separate PII database. */
+export const studentVerifications = pgTable('student_verifications', {
+  id: id(),
+  accountId: uuid('account_id').notNull().references(() => accounts.id),
+  status: text('status', { enum: ['pending', 'approved', 'rejected', 'expired'] }).notNull().default('pending'),
+  schoolName: text('school_name').notNull(),
+  schoolKind: text('school_kind').notNull(),
+  expectedGraduationYear: integer('expected_graduation_year').notNull(),
+  validUntil: timestamp('valid_until', { withTimezone: true }),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  rejectReason: text('reject_reason'),
+  createdAt: createdAt(),
+}, (t) => [
+  index('student_verifications_account_idx').on(t.accountId, t.createdAt),
+  check('student_verifications_school_name_check', sql`char_length(${t.schoolName}) between 1 and 100`),
+]);
+
+/**
+ * One row per submission attempt; `id` is the uploadId shared with the PII database (no foreign key across databases).
+ * The one-shot submission token is stored as a hash only. `blob_ref` is set when the token is consumed by the intake.
+ */
+export const verificationUploads = pgTable('verification_uploads', {
+  id: id(),
+  verificationId: uuid('verification_id').notNull().references(() => studentVerifications.id, { onDelete: 'cascade' }),
+  blobRef: text('blob_ref'),
+  tokenHash: text('token_hash').notNull().unique(),
+  tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }).notNull(),
+  tokenUsedAt: timestamp('token_used_at', { withTimezone: true }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: createdAt(),
+}, (t) => [index('verification_uploads_verification_idx').on(t.verificationId)]);

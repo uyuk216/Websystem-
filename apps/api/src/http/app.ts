@@ -15,7 +15,9 @@ import { Readable } from 'node:stream';
 import { bodyLimit } from 'hono/body-limit';
 import { JOBS, type Storage } from 'platform';
 import type { DynamicRuntime } from '../ingest/dynamic.js';
-import { STATIC_LIMITS } from 'shared';
+import { STATIC_LIMITS, allowAllNetworks, type NetworkReputation } from 'shared';
+import { timingSafeEqual } from 'node:crypto';
+import { consumeUploadToken, startVerification, type StartError } from '../verification/submissions.js';
 import { createDeployment, listDeployments, restart, rollback, type JobQueue } from '../apps/deployments.js';
 import { createApp as createAppRecord, deleteApp, getApp, listApps, listOwners, updateApp } from '../apps/apps.js';
 import { deleteEnvVar, listEnvVars, setEnvVar, type EnvError } from '../apps/env-vars.js';
@@ -50,7 +52,9 @@ const deviceLabel = (c: Context): string => coarseDeviceLabel(c.req.header('user
 export interface AppDeps {
   db: Db;
   mailer: Mailer;
-  config: RecoveryRequestConfig & { emailEncKey: Buffer; appEnvKey?: Buffer; appOrigin: string; rpId: string; authStartLimit?: number };
+  config: RecoveryRequestConfig & { emailEncKey: Buffer; appEnvKey?: Buffer; appOrigin: string; rpId: string; authStartLimit?: number; uploadOrigin?: string; ingestSharedSecret?: string };
+  /** VPN / Tor detection for student ID submissions (phase 6 supplies the real IP database; default: allow all). */
+  network?: NetworkReputation;
   trustedProxyHops?: number;
   /** Object storage and job queue; deployment routes and storage cleanup are enabled when both are given. */
   storage?: Storage;
@@ -228,6 +232,30 @@ export function createApp(deps?: AppDeps): Hono {
     const teamErr = (c: Context, e: keyof typeof teamStatus) => c.json({ error: e }, teamStatus[e]);
     const inviteLimit = rateLimit(clientIp, 30, 3600);
     const jsonBody = async (c: Context) => await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    // Student ID submission: this API only issues a short-lived one-shot token for the dedicated upload origin.
+    // It never receives, stores or forwards any image data (the ciphertext goes browser -> intake -> PII database).
+    const verificationStatus: Record<StartError, 400 | 403 | 409> = { school_name: 400, school_kind: 400, graduation_year: 400, network_blocked: 403, already_verified: 409 };
+    app.post('/verification/start', cookieSession, rateLimit((c) => c.get('accountId'), 10, 3600), async (c) => {
+      const r = await startVerification(deps.db, c.get('accountId'), await jsonBody(c), {
+        network: deps.network ?? allowAllNetworks, ip: clientIp(c), uploadOrigin: deps.config.uploadOrigin ?? 'http://localhost:5174',
+        locale: asLocale(c.req.query('locale')),
+      });
+      if ('error' in r) return c.json({ error: r.error }, verificationStatus[r.error]);
+      const { uploadUrl, uploadId, expiresAt } = r.ok;
+      return c.json({ uploadId, uploadUrl, expiresAt: expiresAt.toISOString() });
+    });
+    // Intake -> API only (shared secret). Absent unless INGEST_SHARED_SECRET is configured.
+    const ingestSecret = deps.config.ingestSharedSecret;
+    if (ingestSecret) {
+      const expected = Buffer.from(ingestSecret);
+      app.post('/internal/verification/consume-token', async (c) => {
+        const given = Buffer.from(c.req.header('x-ingest-secret') ?? '');
+        if (given.length !== expected.length || !timingSafeEqual(given, expected)) return c.json({ error: 'not_found' }, 404);
+        const b = await jsonBody(c);
+        const r = await consumeUploadToken(deps.db, b?.token);
+        return r ? c.json({ uploadId: r.uploadId, accountId: r.accountId, expiresAt: r.expiresAt.toISOString() }) : c.json({ error: 'invalid_token' }, 400);
+      });
+    }
     app.get('/teams', session, async (c) => c.json({ teams: await listTeams(deps.db, c.get('accountId')) }));
     app.post('/teams', session, async (c) => {
       const b = await jsonBody(c);

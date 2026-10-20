@@ -1,0 +1,27 @@
+{
+  "name": "upload",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.env.development --env-file-if-exists=../../.env.pii.development --import tsx --watch src/main.ts",
+    "start": "node --env-file-if-exists=../../.env.development --env-file-if-exists=../../.env.pii.development --import tsx src/main.ts",
+    "keygen": "node --import tsx scripts/keygen.ts",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "i18n": "workspace:*",
+    "platform": "workspace:*",
+    "shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "^26.6.5",
+    "esbuild": "0.25.12",
+    "tsx": "^4.23.15",
+    "vitest": "^4.1.11"
+  }
+}

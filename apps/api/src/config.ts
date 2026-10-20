@@ -15,6 +15,10 @@ export interface Config {
   uploadMaxBytes?: number;
   /** Sign-in/sign-up mails per client IP per 10 minutes (AUTH_START_LIMIT, default 20; raised only for E2E). */
   authStartLimit?: number;
+  /** Origin of the dedicated student-ID upload page (UPLOAD_ORIGIN, default http://localhost:5174). */
+  uploadOrigin: string;
+  /** Shared secret for the upload intake's token-consume call (INGEST_SHARED_SECRET, >= 32 chars); the internal route is absent when unset. */
+  ingestSharedSecret?: string;
   /** GitHub App settings; present only when all three GITHUB_* variables are set. */
   github?: { appId: string; privateKey: string; webhookSecret: string; clientId: string; clientSecret: string };
 }
@@ -51,6 +55,13 @@ function loadGithub(env: NodeJS.ProcessEnv): Config['github'] {
   return { appId, privateKey: key.replace(/\\n/g, '\n'), webhookSecret, clientId, clientSecret };
 }
 
+function loadIngestSecret(env: NodeJS.ProcessEnv): string | undefined {
+  const v = env.INGEST_SHARED_SECRET;
+  if (!v) return undefined;
+  if (v.length < 32) throw new Error('INGEST_SHARED_SECRET must be at least 32 characters');
+  return v;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   return {
     databaseUrl: required(env, 'DATABASE_URL'),
@@ -66,6 +77,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     trustedProxyHops: parseHops(env.TRUSTED_PROXY_HOPS),
     uploadMaxBytes: env.UPLOAD_MAX_BYTES && /^\d+$/.test(env.UPLOAD_MAX_BYTES) ? Number(env.UPLOAD_MAX_BYTES) : undefined,
     authStartLimit: env.AUTH_START_LIMIT && /^\d+$/.test(env.AUTH_START_LIMIT) ? Number(env.AUTH_START_LIMIT) : undefined,
+    uploadOrigin: env.UPLOAD_ORIGIN || 'http://localhost:5174',
+    ingestSharedSecret: loadIngestSecret(env),
     github: loadGithub(env),
   };
 }

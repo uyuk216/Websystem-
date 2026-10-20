@@ -8,3 +8,7 @@ export { validateAppName, APP_NAME_RE } from './app-name.js';
 export type { AppNameCheck } from './app-name.js';
 export { RESERVED_APP_NAMES } from './reserved-names.js';
 export * from './idcrypt/index.js';
+export { SCHOOL_KINDS, UPLOAD_TOKEN_TTL_MS, UPLOAD_RETENTION_MS, validateVerificationInput } from './verification.js';
+export type { SchoolKind, VerificationInput, VerificationInputError } from './verification.js';
+export { allowAllNetworks, staticNetworkReputation } from './network-reputation.js';
+export type { NetworkReputation, NetworkVerdict } from './network-reputation.js';

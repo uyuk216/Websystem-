@@ -157,6 +157,34 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(vite@7.3.7(@types/node@26.6.5)(tsx@4.23.15))
 
+  apps/upload:
+    dependencies:
+      i18n:
+        specifier: workspace:*
+        version: link:../../packages/i18n
+      platform:
+        specifier: workspace:*
+        version: link:../../packages/platform
+      shared:
+        specifier: workspace:*
+        version: link:../../packages/shared
+    devDependencies:
+      '@playwright/test':
+        specifier: 1.56.1
+        version: 1.56.1
+      '@types/node':
+        specifier: ^26.6.5
+        version: 26.6.5
+      esbuild:
+        specifier: 0.25.12
+        version: 0.25.12
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(vite@7.3.7(@types/node@26.6.5)(tsx@4.23.15))
+
   apps/web:
     dependencies:
       '@simplewebauthn/browser':

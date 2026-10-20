@@ -17,3 +17,4 @@ export * from './database/kubernetes-manifests.js';
 export * from './database/kubernetes.js';
 export * from './pii/pool.js';
 export * from './pii/schema.js';
+export * from './pii/ingest.js';

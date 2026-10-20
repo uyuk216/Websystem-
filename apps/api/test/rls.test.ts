@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { assertOwnerBypassesRls, withAccount, withSystem } from '../src/db/client.js';
-import { accounts, emailChallenges, loginEvents, owners, passkeys, sessions, teamInvites, teamMembers, teams } from '../src/db/schema.js';
+import { accounts, emailChallenges, loginEvents, owners, passkeys, sessions, studentVerifications, teamInvites, teamMembers, teams, verificationUploads } from '../src/db/schema.js';
 
 const acct = (h: string) => ({ emailHash: h, emailEnc: 'e', displayName: h, locale: 'ja', adultFrom: '2030-01' });
 
@@ -150,5 +150,50 @@ describe('owner role check', () => {
         await tx.execute(sql`set local role platform_api`);
         await assertOwnerBypassesRls(tx as never);
       })).rejects.toThrow(/SUPERUSER or BYPASSRLS/);
+    }));
+});
+describe('row level security: student verifications', () => {
+  it('shows a verification and its uploads only to their owner', () =>
+    withTestDb(async (db) => {
+      const { a, b } = await seed(db);
+      const mk = async (accountId: string) => {
+        const [v] = await db.insert(studentVerifications).values({ accountId, schoolName: 'S', schoolKind: 'university', expectedGraduationYear: 2030 }).returning();
+        await db.insert(verificationUploads).values({ verificationId: v!.id, tokenHash: `h-${accountId}`, tokenExpiresAt: new Date(Date.now() + 1e6), expiresAt: new Date(Date.now() + 1e9) });
+        return v!;
+      };
+      const va = await mk(a.id);
+      await mk(b.id);
+      await withAccount(db, a.id, async (tx) => {
+        expect((await tx.select().from(studentVerifications)).map((r) => r.id)).toEqual([va.id]);
+        expect(await tx.select().from(verificationUploads)).toHaveLength(1);
+      });
+    }));
+
+  it('lets a user start a pending verification but never approve, backdate or delete one', () =>
+    withTestDb(async (db) => {
+      const { a, b } = await seed(db);
+      const row = { schoolName: 'S', schoolKind: 'university', expectedGraduationYear: 2030 };
+      await expect(withAccount(db, a.id, (tx) => tx.insert(studentVerifications).values({ ...row, accountId: b.id }))).rejects.toThrow();
+      await expect(withAccount(db, a.id, (tx) => tx.insert(studentVerifications).values({ ...row, accountId: a.id, status: 'approved' }))).rejects.toThrow();
+      await expect(withAccount(db, a.id, (tx) => tx.insert(studentVerifications).values({ ...row, accountId: a.id, validUntil: new Date() }))).rejects.toThrow();
+      const [v] = await withAccount(db, a.id, (tx) => tx.insert(studentVerifications).values({ ...row, accountId: a.id }).returning());
+      await withAccount(db, a.id, async (tx) => {
+        expect(await tx.update(studentVerifications).set({ schoolName: 'T' }).where(eq(studentVerifications.id, v!.id)).returning()).toHaveLength(1);
+      });
+      await expect(withAccount(db, a.id, (tx) => tx.update(studentVerifications).set({ status: 'approved' }).where(eq(studentVerifications.id, v!.id)))).rejects.toThrow();
+      await expect(withAccount(db, a.id, (tx) => tx.update(studentVerifications).set({ validUntil: new Date() }).where(eq(studentVerifications.id, v!.id)))).rejects.toThrow();
+      await withAccount(db, a.id, async (tx) => {
+        expect(await tx.delete(studentVerifications).where(eq(studentVerifications.id, v!.id)).returning()).toHaveLength(0);
+      });
+      // Uploads: a user cannot pre-mark a token as used, point blob_ref anywhere, edit or delete.
+      const up = { verificationId: v!.id, tokenHash: 'x', tokenExpiresAt: new Date(Date.now() + 1e6), expiresAt: new Date(Date.now() + 1e9) };
+      await expect(withAccount(db, a.id, (tx) => tx.insert(verificationUploads).values({ ...up, blobRef: 'x' }))).rejects.toThrow();
+      const [u] = await withAccount(db, a.id, (tx) => tx.insert(verificationUploads).values(up).returning());
+      await withAccount(db, a.id, async (tx) => {
+        expect(await tx.update(verificationUploads).set({ tokenUsedAt: new Date() }).where(eq(verificationUploads.id, u!.id)).returning()).toHaveLength(0);
+        expect(await tx.delete(verificationUploads).where(eq(verificationUploads.id, u!.id)).returning()).toHaveLength(0);
+      });
+      // And another account cannot attach an upload to it.
+      await expect(withAccount(db, b.id, (tx) => tx.insert(verificationUploads).values({ ...up, tokenHash: 'y' }))).rejects.toThrow();
     }));
 });
