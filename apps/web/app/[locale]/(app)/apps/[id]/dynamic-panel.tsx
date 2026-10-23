@@ -1,4 +1,5 @@
 'use client';
+import { UsageNotice } from '@/components/usage-notice';
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
 import { errorKey, useI18n } from '@/lib/i18n';
@@ -77,6 +78,7 @@ export function DynamicPanel({ id, active, statusLabel }: { id: string; active: 
         </ul>
       )}
 
+      <UsageNotice id={id} near={!!usage?.runtime && [usage.runtime.month, usage.runtime.fiscalYear].some((p) => p.limitMinutes > 0 && p.minutes >= p.limitMinutes * 0.8)} />
       <h2>{t('dyn.env.title')}</h2>
       <p className="muted">{t('dyn.env.help')}</p>
       {vars?.length === 0 && <p className="blankslate">{t('dyn.env.empty')}</p>}

@@ -82,3 +82,13 @@
 - Task 5 のダミー凍結解除を `transitionUsageState` に置換し、worker の `admin.dangerous-execute` を毎分予約。24 時間待機・取消・一度だけ実行・別の停止理由の維持を検証。手動停止／解除の理由を状態機械に追加。静的配信・DB・データは既存どおり維持する。
 - 検証: API 全 288 件、admin 7／worker 8／platform 145／shared 66／i18n 3／upload 12 件通過。Vitest はすべて `--testTimeout=30000`。`pnpm -r typecheck`・`pnpm -r lint` 通過。Docker のビルド作業先は書込可能な `BUILDX_CONFIG=/tmp/task10-buildx` を使用。実 DB 2 系統で提出→復号→差し戻し→再提出→承認→Student・動的アプリ作成・暗号文削除を確認。
 - Playwright 3 本を追加（上記の学生審査、Starter 承認・終了通知、ブースト期間内外、非運営者の拒否）。使い捨て DB と既存 upload のツールを利用。Chromium は `bootstrap_check_in ... Permission denied (1100)`、既存 Firefox/WebKit も起動時 abort のためブラウザ実行は未確認。追加インストール・コミット・lockfile/node_modules 編集なし。Task 11 は対象外。
+
+### Task 11: 利用者向け Web 画面とドキュメント — 実装済み（未コミット、ブラウザ E2E 未実行）
+- 日英のプラン／学生審査画面、期限・停止日（期限切れ後も表示）、年間予定、再提出・Starter・ブーストへの導線を追加。学生証の別サイトへの提出・ブラウザ内暗号化・メールでは求めないことを説明。本人限定の状況 API と、閲覧可能なアプリの所有者に合わせた案内 API は保存不可で応答。
+- 転送量・稼働時間・DB容量の80%通知メールと画面にプラン別の案内を追加。`pnpm dev` に admin/upload を追加し、README に設定・起動・Tailscale・鍵の扱い・運営者登録を記載。`add-operator.ts` は既存アカウントの登録と監査記録を同一処理で行い、上書きを拒否。
+- 日英の画面 E2E 2本を追加（テスト用付与によるプラン切替・差し戻し理由の表示。運営者による承認経路は Task 10 の E2E）。**ブラウザ E2E 実行は引き続き未完了**（Task 10 の環境制限を引き継ぎ、本タスクでは実行していない）。
+
+- 検証: API 全44ファイル／290件、web 4件、i18n 3件が `--testTimeout=30000` で通過。`pnpm -r typecheck`・`pnpm -r lint` 通過。API の Docker 作業先は `BUILDX_CONFIG=/tmp/task11-buildx`。運営者登録の原子性・上書き拒否・監査連鎖、本人以外への非開示、期限切れ後の日付表示、日英表示・理由のエスケープを確認。インストール・コミット・lockfile/node_modules 編集なし。
+
+## Phase 5 の完了状態
+- **Tasks 1–11 の実装完了。ブラウザ E2E の実行・確認は未完了。** 実装完了とブラウザでの確認完了は別として扱う。

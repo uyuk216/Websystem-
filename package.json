@@ -13,7 +13,7 @@
     "test": "pnpm -r --if-present test",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
-    "dev": "concurrently -k -n api,web,worker,static -c blue,green,magenta,yellow \"pnpm --filter api dev\" \"pnpm --filter web dev\" \"pnpm --filter worker dev\" \"pnpm --filter static dev\""
+    "dev": "concurrently -k -n api,web,worker,static,admin,upload -c blue,green,magenta,yellow,cyan,white \"pnpm --filter api dev\" \"pnpm --filter web dev\" \"pnpm --filter worker dev\" \"pnpm --filter static dev\" \"pnpm --filter admin dev\" \"pnpm --filter upload dev\""
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",

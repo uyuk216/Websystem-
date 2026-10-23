@@ -1,4 +1,5 @@
 'use client';
+import { UsageNotice } from '@/components/usage-notice';
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
 import { errorKey, useI18n } from '@/lib/i18n';
@@ -65,6 +66,7 @@ export function DatabasePanel({ id, name }: { id: string; name: string }) {
               <p>{t('db.ready')}</p>
               <label htmlFor="db-usage">{t('db.usage', { used: mb(db.sizeBytes), limit: mb(db.limitBytes) })}</label>
               <progress id="db-usage" max={100} value={pct} className={pct >= 80 ? 'warn' : undefined}>{pct}%</progress>
+              <UsageNotice id={id} near={db.limitBytes > 0 && db.sizeBytes >= db.limitBytes * 0.8} />
               {db.writeMode === 'read_only' && <p className="notice" role="note">{t('db.readOnly')}</p>}
               {db.writeMode === 'blocked' && <p className="notice" role="note">{t('db.blocked')}</p>}
 

@@ -1,4 +1,5 @@
 'use client';
+import { UsageNotice } from '@/components/usage-notice';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
@@ -125,6 +126,7 @@ export default function AppPage() {
       {app.kind === 'dynamic' && <DynamicPanel id={app.id} active={app.activeDeploymentId !== null} statusLabel={t(app.activeDeploymentId ? 'deploy.status.live' : 'dyn.status.none')} />}
       {app.kind === 'dynamic' && <p><a href={`/${locale}/apps/${app.id}/boost`}>{t('boost.title')}</a></p>}
       {app.kind === 'dynamic' && <DatabasePanel id={app.id} name={app.name} />}
+      <UsageNotice id={id} boost={app.kind === 'dynamic'} near={!!usage && usage.limitBytes > 0 && usage.bytes >= usage.limitBytes * 0.8} />
       {app.kind !== 'dynamic' && usage && <p className="muted">{t('apps.usage')}: {(usage.bytes / 1048576).toFixed(1)} / {(usage.limitBytes / 1048576).toFixed(0)} MB</p>}
 
       <h2>{t('deploy.upload')}</h2>

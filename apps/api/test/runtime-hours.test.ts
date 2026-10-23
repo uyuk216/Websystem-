@@ -114,6 +114,7 @@ describe('runtime metering', () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(mailer.sentTo('o@example.com')).toBe(1);
     expect(mailer.lastBodyTo('o@example.com')).toContain('2026-10');
+    expect(mailer.lastBodyTo('o@example.com')).toContain('boost');
     expect((await usage(db, a.ownerId, '2026-10'))?.notified80).toBe(true);
   }));
 

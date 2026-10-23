@@ -57,4 +57,4 @@ fi
 pnpm --filter platform pii:migrate
 
 echo "開発環境の起動が完了しました"
-echo "アプリ（api / web / worker / static）は別ターミナルで: pnpm dev  （web http://localhost:5173、サイト http://<名前>.localhost:8090）"
+echo "アプリ（api / web / worker / static / admin / upload）は別ターミナルで: pnpm dev  （web http://localhost:5173、管理 http://localhost:5175、提出 http://localhost:5174、サイト http://<名前>.localhost:8090）"

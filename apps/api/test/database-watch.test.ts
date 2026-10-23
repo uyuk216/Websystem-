@@ -59,6 +59,7 @@ describe('database size watch', () => {
     await run(90);
     expect(mail.sentTo(s.email)).toBe(1);
     expect(mail.lastBodyTo(s.email)).toContain('85.0MB');
+    expect(mail.lastBodyTo(s.email)).toContain('ブースト');
     await run(100);
     expect(mail.sentTo(s.email)).toBe(2);
     expect(f.modes).toEqual(['read_only']);

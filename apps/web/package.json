@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start -p 5173",
     "e2e": "playwright test",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."
   },

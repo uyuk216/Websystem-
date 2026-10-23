@@ -1,3 +1,5 @@
+import { planGuidance } from '../usage/plan-guidance.js';
+import { getPlanStatus, getVerificationStatus } from '../grants/plan-status.js';
 import { Hono, type Context } from 'hono';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import type { Db } from '../db/client.js';
@@ -243,6 +245,14 @@ export function createApp(deps?: AppDeps): Hono {
     const jsonBody = async (c: Context) => await c.req.json().catch(() => null) as Record<string, unknown> | null;
     // Student ID submission: this API only issues a short-lived one-shot token for the dedicated upload origin.
     // It never receives, stores or forwards any image data (the ciphertext goes browser -> intake -> PII database).
+    app.get('/plan', cookieSession, async (c) => {
+      c.header('Cache-Control', 'no-store');
+      return c.json(await getPlanStatus(deps.db, c.get('accountId')));
+    });
+    app.get('/verification/status', cookieSession, async (c) => {
+      c.header('Cache-Control', 'no-store');
+      return c.json(await getVerificationStatus(deps.db, c.get('accountId')));
+    });
     const verificationStatus: Record<StartError, 400 | 403 | 409> = { school_name: 400, school_kind: 400, graduation_year: 400, network_blocked: 403, already_verified: 409 };
     app.post('/verification/start', cookieSession, rateLimit((c) => c.get('accountId'), 10, 3600), async (c) => {
       const r = await startVerification(deps.db, c.get('accountId'), await jsonBody(c), {
@@ -356,6 +366,12 @@ export function createApp(deps?: AppDeps): Hono {
     app.get('/apps/:id', session, async (c) => {
       const a = await getApp(deps.db, c.get('accountId'), c.req.param('id'));
       return a ? c.json(a) : c.json({ error: 'not_found' }, 404);
+    });
+    app.get('/apps/:id/plan-guidance', session, async (c) => {
+      c.header('Cache-Control', 'no-store');
+      const a = await getApp(deps.db, c.get('accountId'), c.req.param('id'));
+      if (!a) return c.json({ error: 'not_found' }, 404);
+      return c.json({ guidance: await planGuidance(deps.db, a.ownerId, asLocale(c.req.query('locale'))) });
     });
     app.get('/apps/:id/usage', session, async (c) => {
       const u = await getUsage(deps.db, c.get('accountId'), c.req.param('id'));

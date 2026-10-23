@@ -1,3 +1,4 @@
+import { planGuidance } from '../usage/plan-guidance.js';
 import { eq } from 'drizzle-orm';
 import { t } from 'i18n';
 import { databaseNames, type DatabaseDriver, type DatabaseWriteMode } from 'platform';
@@ -69,7 +70,7 @@ export async function checkDatabaseSizes(o: DatabaseWatchOptions): Promise<Array
         const to = await ownerContact(o.db, r.ownerId, o.emailKey);
         if (to) {
           const p = { app: r.name, used: (size / MB).toFixed(1), limit: (limit / MB).toFixed(0) };
-          await mailer.sendMail(to.email, t(to.locale, `${key}Subject` as const, p), t(to.locale, `${key}Body` as const, p));
+          await mailer.sendMail(to.email, t(to.locale, `${key}Subject` as const, p), t(to.locale, `${key}Body` as const, p) + '\n\n' + await planGuidance(o.db, r.ownerId, to.locale));
         }
       } catch (e) { console.error('database usage mail failed', r.appId, e); }
     }

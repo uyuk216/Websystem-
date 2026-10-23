@@ -1,3 +1,4 @@
+import { planGuidance } from './plan-guidance.js';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { t } from 'i18n';
 import { DYNAMIC_LIMITS } from 'shared';
@@ -190,7 +191,7 @@ function notifyOwner(opts: MeterRuntimeOptions, ownerId: string, p: Period, used
     if (!target) return;
     const { locale } = target;
     const params = { period: p.key, limit: formatHours(p.limit), used: formatHours(used) };
-    await mailer.sendMail(target.email, t(locale, 'runtime.warnSubject', params), t(locale, 'runtime.warnBody', params));
+    await mailer.sendMail(target.email, t(locale, 'runtime.warnSubject', params), t(locale, 'runtime.warnBody', params) + '\n\n' + await planGuidance(db, ownerId, locale));
   }).catch((err: unknown) => console.error('runtime 80% mail failed', ownerId, err));
 }
 

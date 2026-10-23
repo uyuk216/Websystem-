@@ -13,6 +13,8 @@ export interface NavGroup { label: MessageKey; items: NavItem[] }
 export const NAV: NavGroup[] = [
   { label: 'nav.groupMain', items: [
     { href: '/apps', label: 'nav.apps', icon: 'apps' },
+    { href: '/plan', label: 'nav.plan', icon: 'history' },
+    { href: '/verify', label: 'nav.verify', icon: 'passkey' },
     { href: '/teams', label: 'nav.teams', icon: 'teams' },
   ] },
   { label: 'nav.groupAccount', items: [

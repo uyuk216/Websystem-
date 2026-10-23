@@ -1,3 +1,4 @@
+import { planGuidance } from './plan-guidance.js';
 import { and, eq, sql } from 'drizzle-orm';
 import { t, type Locale } from 'i18n';
 import { STATIC_LIMITS } from 'shared';
@@ -126,7 +127,7 @@ export function createTransferMeter(opts: TransferMeterOptions): TransferMeter {
     // Fire-and-forget; Promise.resolve().then also catches synchronous throws.
     const p: Promise<void> = Promise.resolve().then(async () => {
       const target = await withSystem(db, async (tx) => {
-        const [a] = await tx.select({ name: apps.name, kind: owners.kind, accountId: owners.accountId, teamId: owners.teamId })
+        const [a] = await tx.select({ name: apps.name, ownerId: apps.ownerId, kind: owners.kind, accountId: owners.accountId, teamId: owners.teamId })
           .from(apps).innerJoin(owners, eq(owners.id, apps.ownerId)).where(eq(apps.id, appId));
         if (!a) return null;
         let accountId = a.accountId;
@@ -137,12 +138,12 @@ export function createTransferMeter(opts: TransferMeterOptions): TransferMeter {
         }
         if (!accountId) return null;
         const [acc] = await tx.select({ emailEnc: accounts.emailEnc, locale: accounts.locale }).from(accounts).where(eq(accounts.id, accountId));
-        return acc ? { app: a.name, ...acc } : null;
+        return acc ? { app: a.name, ownerId: a.ownerId, ...acc } : null;
       });
       if (!target) return;
       const locale: Locale = target.locale === 'en' ? 'en' : 'ja';
       const params = { app: target.app, limit: formatBytes(limit), used: formatBytes(used) };
-      await mailer.sendMail(decryptEmail(target.emailEnc, emailKey), t(locale, 'transfer.warnSubject', params), t(locale, 'transfer.warnBody', params));
+      await mailer.sendMail(decryptEmail(target.emailEnc, emailKey), t(locale, 'transfer.warnSubject', params), t(locale, 'transfer.warnBody', params) + '\n\n' + await planGuidance(db, target.ownerId, locale));
     }).catch((err: unknown) => console.error('transfer 80% mail failed', appId, err));
     mails.add(p);
     void p.finally(() => mails.delete(p));

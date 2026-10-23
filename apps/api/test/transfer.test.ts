@@ -89,6 +89,7 @@ describe('transfer meter', () => {
     expect(mailer.sentTo('owner@example.com')).toBe(1);
     expect(mailer.lastBodyTo('owner@example.com')).toContain('80%');
     expect(mailer.lastBodyTo('owner@example.com')).toContain('サイト');
+    expect(mailer.lastBodyTo('owner@example.com')).toContain('Starter');
     expect((await rowOf(db, id, '2026-10'))?.notified80).toBe(true);
     meter.record(id, 100);
     await meter.flush();
