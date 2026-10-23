@@ -1,4 +1,11 @@
-import { isLimitSettingKey, validLimitValue } from 'shared';
+import type { RuntimeDriver } from 'platform';
+import type { ReviewDeps } from '../verification/review.js';
+import { registerReviews } from './reviews.js';
+import { registerGrants } from './grants.js';
+import { registerAccounts } from './accounts.js';
+import { transitionUsageState } from '../usage/state.js';
+import { owners } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -13,12 +20,15 @@ import { listAudit, verifyAuditChain, withAdmin } from './audit-log.js';
 import { cancelDangerous, listDangerous, scheduleDangerous, type DangerousHandlers } from './dangerous.js';
 import { findOperatorByLogin, getOperator, type Operator } from './operators.js';
 import { sourceAllowed, type TailscalePolicy } from './tailscale.js';
-import { platformSettings } from '../db/schema.js';
+import { registerSettings } from './settings.js';
 
 export interface AdminDeps {
   db: Db;
   mailer: Mailer;
   emailEncKey: Buffer;
+  emailHashKey?: Buffer;
+  driver?: Pick<RuntimeDriver, 'stop'>;
+  review?: ReviewDeps & { readCiphertext(uploadId: string, accountId: string): Promise<Uint8Array | null> };
   /** WebAuthn: rpId plus the admin UI origin (not the public app origin). */
   passkey: PasskeyConfig;
   tailscale: TailscalePolicy;
@@ -30,14 +40,18 @@ export interface AdminDeps {
 declare module 'hono' {
   interface ContextVariableMap {
     operator: Operator;
+    adminExpiresAt: string;
   }
 }
 
-/** Example registry for the 24-hour booking framework. Real freeze/unfreeze lands with the usage state machine (task 7). */
+/** The target is an owner UUID; unfreezing must always use the delayed executor. */
 export const defaultDangerousHandlers: DangerousHandlers = {
   unfreeze_account: async (tx, target) => {
-    await tx.insert(platformSettings).values({ key: `account.unfrozen.${target}`, value: { at: new Date().toISOString() }, updatedBy: sql`app_operator_id()` as never })
-      .onConflictDoUpdate({ target: platformSettings.key, set: { value: { at: new Date().toISOString() }, updatedBy: sql`app_operator_id()` as never, updatedAt: new Date() } });
+    if (!UUID.test(target)) throw new Error('invalid owner');
+    await tx.execute(sql`reset role`);
+    const [owner] = await tx.select({ id: owners.id }).from(owners).where(eq(owners.id, target));
+    if (!owner) throw new Error('owner not found');
+    await transitionUsageState(tx as unknown as Db, target, 'manual_unfreeze');
   },
 };
 
@@ -74,6 +88,11 @@ export function createAdminApp(deps: AdminDeps): Hono {
     return next();
   };
   app.use('*', gate);
+  app.use('*', async (c, next) => {
+    const origin = c.req.header('origin');
+    if (!['GET', 'HEAD'].includes(c.req.method) && ((origin && origin !== deps.passkey.appOrigin) || c.req.header('sec-fetch-site') === 'cross-site')) return c.json({ error: 'forbidden' }, 403);
+    return next();
+  });
 
   // A session must belong to the same operator the Tailscale header names now.
   const elevated: MiddlewareHandler = async (c, next) => {
@@ -84,6 +103,7 @@ export function createAdminApp(deps: AdminDeps): Hono {
     const fresh = await getOperator(db, operator.accountId);
     if (!fresh) return c.json({ error: 'unauthorized' }, 401);
     c.set('operator', fresh);
+    c.set('adminExpiresAt', s.expiresAt.toISOString());
     return next();
   };
   const ownerOnly: MiddlewareHandler = async (c, next) => (c.get('operator').role === 'owner' ? next() : c.json({ error: 'forbidden' }, 403));
@@ -117,7 +137,7 @@ export function createAdminApp(deps: AdminDeps): Hono {
   // ---- everything below needs the elevated session ----
   app.use('/admin/*', async (c, next) => (c.req.path.startsWith('/admin/session/') ? next() : elevated(c, next)));
 
-  app.get('/admin/me', (c) => c.json({ accountId: c.get('operator').accountId, role: c.get('operator').role }));
+  app.get('/admin/me', (c) => c.json({ accountId: c.get('operator').accountId, role: c.get('operator').role, expiresAt: c.get('adminExpiresAt') }));
 
   app.get('/admin/audit', async (c) => {
     const limit = Number(c.req.query('limit') ?? 100);
@@ -130,26 +150,7 @@ export function createAdminApp(deps: AdminDeps): Hono {
     return c.json({ ok: bad === null, firstBadSeq: bad });
   });
 
-  app.get('/admin/settings', async (c) => {
-    const rows = await withAdmin(db, c.get('operator'), { action: 'settings.list', target: '*' }, (tx) => tx.select().from(platformSettings));
-    return c.json({ settings: rows });
-  });
-  app.put('/admin/settings/:key', ownerOnly, async (c) => {
-    const key = c.req.param('key');
-    const b = await jsonBody(c);
-    if (!/^[a-z0-9_.-]{1,100}$/i.test(key) || !b || !('value' in b)) return c.json({ error: 'invalid' }, 400);
-    // Plan limits (`limits.*`) must be known keys with a non-negative number, otherwise they would silently do nothing.
-    if (key.startsWith('limits.') && (!isLimitSettingKey(key) || !validLimitValue(b.value))) return c.json({ error: 'invalid' }, 400);
-    const op = c.get('operator');
-    // Before/after values are part of the record.
-    await withAdmin(db, op, { action: 'settings.update', target: key }, async (tx, ctx) => {
-      const [before] = await tx.select().from(platformSettings).where(sql`${platformSettings.key} = ${key}`);
-      await tx.insert(platformSettings).values({ key, value: b.value as never, updatedBy: op.accountId })
-        .onConflictDoUpdate({ target: platformSettings.key, set: { value: b.value as never, updatedBy: op.accountId, updatedAt: new Date() } });
-      await ctx.audit('settings.changed', key, { before: before?.value ?? null, after: b.value as never });
-    });
-    return c.json({ ok: true });
-  });
+  registerSettings(app, deps, ownerOnly);
 
   // ---- dangerous operations: booked 24 h ahead, owners only ----
   app.get('/admin/dangerous', async (c) => c.json({ actions: await listDangerous(db, c.get('operator')) }));
@@ -165,6 +166,10 @@ export function createAdminApp(deps: AdminDeps): Hono {
     if (!UUID.test(id)) return c.json({ error: 'invalid' }, 400);
     return (await cancelDangerous(db, deps.mailer, deps.emailEncKey, c.get('operator'), id)) ? c.json({ ok: true }) : c.json({ error: 'not_found' }, 404);
   });
+
+  registerReviews(app, deps);
+  registerGrants(app, deps, ownerOnly);
+  registerAccounts(app, deps, ownerOnly);
 
   app.notFound((c) => NOT_FOUND(c));
   return app;

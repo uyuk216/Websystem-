@@ -33,6 +33,7 @@ await registerHandlers(boss, defaultHandlers({ db, storage, runtime, verificatio
 if (verification) await boss.schedule(JOBS.verificationPurge, '0 * * * *');
 // 毎時 5 分: 利用の状態の評価（付与の期限・5/1 の停止・3 月の再登録の案内）。
 await boss.schedule(JOBS.usageEvaluate, '5 * * * *');
+await boss.schedule(JOBS.dangerousExecute, '* * * * *');
 
 // Stale `queued` deployments (never enqueued, or the enqueuing process died) are failed at startup and every 10 minutes.
 const sweep = () => sweepStaleDeployments(db).then((n) => { if (n > 0) console.log(`worker: failed ${n} stale queued deployment(s)`); }, (e: unknown) => console.error('worker: stale sweep failed', e));

@@ -9,7 +9,6 @@ import { handleTunnelUpgrade } from './apps/database-tunnel.js';
 import { createWakeLocker } from './apps/wake.js';
 import { createMailer } from './mail/mailer.js';
 import { createGithubAccountLookup } from './verification/github-age.js';
-import { createAdminApp } from './admin/server.js';
 
 const config = loadConfig(process.env);
 const { db } = createDb(config.databaseUrl);
@@ -32,14 +31,4 @@ const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
 // `yourservice db connect`: raw PostgreSQL over an upgraded connection (see apps/database-tunnel.ts).
 server.on('upgrade', (req, socket, head) => {
   if (!handleTunnelUpgrade(db, runtime, req, socket, head)) socket.destroy();
-});
-// Admin API: a separate app on a separate port, never mounted on the public app. Reachable only from Tailscale (see admin/tailscale.ts).
-const adminApp = createAdminApp({
-  db, mailer, emailEncKey: config.emailEncKey,
-  passkey: { rpId: config.rpId, appOrigin: config.adminOrigin, emailEncKey: config.emailEncKey },
-  tailscale: { required: config.tailscaleRequired, devLoopback: config.adminDevTailscale },
-  secureCookie: config.adminOrigin.startsWith('https:'),
-});
-serve({ fetch: adminApp.fetch, port: config.adminApiPort, hostname: config.adminBind }, (info) => {
-  console.log(`admin api listening on ${config.adminBind}:${info.port}`);
 });

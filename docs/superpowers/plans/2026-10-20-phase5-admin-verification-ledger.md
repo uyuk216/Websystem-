@@ -75,3 +75,10 @@
 ### Task 9: イベントブースト — 実装済み（未コミット）
 - 申請・審査、7 日/3 日前制約、期間重複拒否、転送量・メモリ・スリープ上書き、開始/終了時の稼働コンテナ再作成を実装。実行時間集計には既存 runtime-hours 経路を維持。
 - 検証: `packages/shared` 7 files / 66 tests、API 専用 2 files / 21 tests 通過。`pnpm -r typecheck` と `pnpm -r lint` 通過。
+
+### Task 10: 管理画面の機能 — 実装済み（ブラウザ E2E は環境制限で未確認）
+- 日本語の昇格ログイン・審査／付与と履歴／完全一致のメール検索と記録付き表示／利用状態／上限設定／監査連鎖検証を接続。変更は先に監査を書き、既存サービスを同一トランザクションで実行。Student の承認・手動付与・取消は所有者の状態も再評価する。
+- 復号はブラウザの `Decryptor` のみ。鍵を送信せず、平文バッファをゼロ埋め、画像 URL を閉じる・非表示・画面切替・30 秒無操作・セッション期限で破棄。右クリック／ドラッグ保存を抑止（OS の画面取得は防げない）。管理 API の起動を `apps/admin` へ移し、審査用 DB 接続を公開 API から分離。起動・ローカル鍵の手順は `apps/admin/README.md`。
+- Task 5 のダミー凍結解除を `transitionUsageState` に置換し、worker の `admin.dangerous-execute` を毎分予約。24 時間待機・取消・一度だけ実行・別の停止理由の維持を検証。手動停止／解除の理由を状態機械に追加。静的配信・DB・データは既存どおり維持する。
+- 検証: API 全 288 件、admin 7／worker 8／platform 145／shared 66／i18n 3／upload 12 件通過。Vitest はすべて `--testTimeout=30000`。`pnpm -r typecheck`・`pnpm -r lint` 通過。Docker のビルド作業先は書込可能な `BUILDX_CONFIG=/tmp/task10-buildx` を使用。実 DB 2 系統で提出→復号→差し戻し→再提出→承認→Student・動的アプリ作成・暗号文削除を確認。
+- Playwright 3 本を追加（上記の学生審査、Starter 承認・終了通知、ブースト期間内外、非運営者の拒否）。使い捨て DB と既存 upload のツールを利用。Chromium は `bootstrap_check_in ... Permission denied (1100)`、既存 Firefox/WebKit も起動時 abort のためブラウザ実行は未確認。追加インストール・コミット・lockfile/node_modules 編集なし。Task 11 は対象外。

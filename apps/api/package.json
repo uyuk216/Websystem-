@@ -21,6 +21,8 @@
     "./verification-review": "./src/verification/review.ts",
     "./usage-state": "./src/usage/state.ts",
     "./starter": "./src/grants/starter.ts",
+    "./admin-dangerous": "./src/admin/dangerous.ts",
+    "./admin-handlers": "./src/admin/server.ts",
     "./event-boost": "./src/grants/event-boost.ts"
   },
   "scripts": {

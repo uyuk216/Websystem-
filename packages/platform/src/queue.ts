@@ -8,6 +8,7 @@ export const JOBS = {
   /** 毎時: 学生証の暗号文の期限切れ・孤児の掃除（Task 4）。 */
   verificationPurge: 'verification.purge',
   /** 毎時: 利用の状態の評価（付与の期限・停止日、3 月の再登録の案内）（Task 7）。 */
+  dangerousExecute: 'admin.dangerous-execute',
   usageEvaluate: 'usage.evaluate',
 } as const;
 /** Retries for deployment processing (pg-boss retryLimit); the last attempt records the failure. */

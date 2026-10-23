@@ -33,6 +33,7 @@ describe('applyUsageEvent: 全イベント x 全理由の組み合わせ表', ()
     return out;
   };
   const MANUAL: Partial<Record<UsageEvent, [UsageReason, 'add' | 'remove']>> = {
+    manual_suspend: ['manual_suspend', 'add'], manual_resume: ['manual_suspend', 'remove'],
     manual_block: ['manual_block', 'add'], manual_unblock: ['manual_block', 'remove'],
     manual_freeze: ['manual_freeze', 'add'], manual_unfreeze: ['manual_freeze', 'remove'],
   };

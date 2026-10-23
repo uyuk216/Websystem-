@@ -1,32 +1,19 @@
 import { createServer, type Server } from 'node:http';
+import { fileURLToPath } from 'node:url';
+import { buildBrowserScript } from '../../upload/src/client-build.js';
 import { SECURITY_HEADERS } from './security-headers.js';
+import { PAGE, STYLE } from './page.js';
 
-const PAGE = `<!doctype html>
-<html lang="ja">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>運営管理画面</title><link rel="stylesheet" href="/app.css"></head>
-<body><main><h1>運営管理画面</h1><p id="status">確認中…</p></main><script src="/app.js"></script></body>
-</html>`;
-const SCRIPT = `fetch('/admin/me', { credentials: 'same-origin' }).then(function (r) {
-  document.getElementById('status').textContent = r.status === 200 ? 'ログイン済みです。' : r.status === 401 ? '昇格ログインが必要です（パスキー）。' : 'この画面は利用できません。';
-}).catch(function () { document.getElementById('status').textContent = '管理 API に接続できません。'; });
-`;
-const STYLE = 'body{font-family:system-ui,sans-serif;margin:2rem auto;max-width:48rem;padding:0 1rem}\n';
-
-const ROUTES: Record<string, { type: string; body: string }> = {
-  '/': { type: 'text/html; charset=utf-8', body: PAGE },
-  '/app.js': { type: 'text/javascript; charset=utf-8', body: SCRIPT },
-  '/app.css': { type: 'text/css; charset=utf-8', body: STYLE },
-};
-
-/** The admin UI shell. Feature screens (reviews, grants, accounts, settings, audit) are phase 5 task 10. */
+let script: Promise<Uint8Array> | undefined;
 export function createAdminShell(): Server {
   return createServer((req, res) => {
-    const path = new URL(req.url ?? '/', 'http://localhost').pathname;
-    const route = req.method === 'GET' || req.method === 'HEAD' ? ROUTES[path] : undefined;
-    if (!route) {
-      res.writeHead(404, { ...SECURITY_HEADERS, 'Content-Type': 'text/plain; charset=utf-8' }).end('not found');
-      return;
-    }
-    res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': route.type }).end(req.method === 'HEAD' ? undefined : route.body);
+    void (async () => {
+      const path = new URL(req.url ?? '/', 'http://localhost').pathname;
+      if (!['GET', 'HEAD'].includes(req.method ?? '') || !['/', '/app.js', '/app.css'].includes(path)) {
+        res.writeHead(404, { ...SECURITY_HEADERS, 'Content-Type': 'text/plain; charset=utf-8' }).end('not found'); return;
+      }
+      const body = path === '/' ? PAGE : path === '/app.css' ? STYLE : await (script ??= buildBrowserScript(fileURLToPath(new URL('./client.ts', import.meta.url))));
+      res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': path === '/' ? 'text/html; charset=utf-8' : path === '/app.css' ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8' }).end(req.method === 'HEAD' ? undefined : body);
+    })().catch(() => { res.writeHead(500, SECURITY_HEADERS).end('unavailable'); });
   });
 }

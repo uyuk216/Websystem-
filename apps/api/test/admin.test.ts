@@ -14,6 +14,8 @@ import { createAdminApp, defaultDangerousHandlers } from '../src/admin/server.js
 import { isTailscaleAddress, sourceAllowed } from '../src/admin/tailscale.js';
 import { verifyAuditChain, withAdmin } from '../src/admin/audit-log.js';
 import { runDueDangerous, DANGEROUS_LEAD_MS } from '../src/admin/dangerous.js';
+import { ensureAccountOwner } from '../src/teams/teams.js';
+import { readUsageState, transitionUsageState } from '../src/usage/state.js';
 import { loadConfig } from '../src/config.js';
 
 const ADMIN_ORIGIN = 'https://admin.example.ts.net';
@@ -145,7 +147,7 @@ describe('elevated login (passkey)', () => {
     const tokenA = await login(call, a);
     const cookieA = `asid=${tokenA}`;
     const me = await call('/admin/me', { login: a.login, cookie: cookieA });
-    expect(await me.json()).toEqual({ accountId: a.a.id, role: 'owner' });
+    expect(await me.json()).toMatchObject({ accountId: a.a.id, role: 'owner', expiresAt: expect.any(String) });
     // The session belongs to A: B's Tailscale identity with A's cookie is refused.
     expect((await call('/admin/me', { login: b.login, cookie: cookieA })).status).toBe(401);
 
@@ -300,7 +302,9 @@ describe('dangerous actions: 24-hour booking (example: unfreeze_account)', () =>
     const { call, mailer } = build(db);
     const co = `asid=${await login(call, owner)}`;
     const cr = `asid=${await login(call, rev)}`;
-    const victim = await mkAccount(db, 'victim@x.y');
+    const victimAccount = await mkAccount(db, 'victim@x.y');
+    const victim = { id: await ensureAccountOwner(db, victimAccount.id) };
+    await transitionUsageState(db, victim.id, 'manual_freeze');
 
     expect((await call('/admin/dangerous', { method: 'POST', login: rev.login, cookie: cr, body: { action: 'unfreeze_account', target: victim.id } })).status).toBe(403);
     expect((await call('/admin/dangerous', { method: 'POST', login: owner.login, cookie: co, body: { action: 'wipe_everything', target: 'all' } })).status).toBe(400);
@@ -324,7 +328,7 @@ describe('dangerous actions: 24-hour booking (example: unfreeze_account)', () =>
     const due = new Date(before + DANGEROUS_LEAD_MS + 5000);
     expect(await runDueDangerous(db, defaultDangerousHandlers, due)).toBe(1);
     expect(await runDueDangerous(db, defaultDangerousHandlers, due)).toBe(0);
-    expect((await db.select().from(platformSettings))[0]!.key).toBe(`account.unfrozen.${victim.id}`);
+    expect(await readUsageState(db, victim.id)).toBe('active');
     expect((await db.select().from(scheduledDangerousActions))[0]!.status).toBe('executed');
     const actions = (await db.select().from(adminAuditLog)).map((r) => r.action);
     expect(actions).toContain('dangerous.schedule');

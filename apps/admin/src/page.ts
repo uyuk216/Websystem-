@@ -1,0 +1,7 @@
+import { ADMIN_JA } from '../../../packages/i18n/src/admin.js';
+// 管理画面は日本語のみ。英訳はこのタスクの対象外。
+export const PAGE = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${ADMIN_JA.title}</title><link rel="stylesheet" href="/app.css"></head>
+<body><main><h1>${ADMIN_JA.title}</h1><p id="status" role="status">確認中…</p><button id="login">パスキーで昇格ログイン</button><button id="logout" hidden>ログアウト</button>
+<div id="ops" hidden><nav><button data-screen="reviews">審査</button><button data-screen="grants">付与</button><button data-screen="accounts">利用者</button><button data-screen="settings">設定</button><button data-screen="audit">記録</button></nav>
+<section id="screen"></section><aside id="viewer" hidden><h2>学生証（30秒操作がないと破棄）</h2><label>ローカル秘密鍵ファイル<input id="secret" type="file"></label><button id="decrypt">ローカル復号</button><button id="close-image">画像を閉じる</button><img id="image" alt="学生証" hidden></aside></div></main><script type="module" src="/app.js"></script></body></html>`;
+export const STYLE = 'body{font-family:system-ui,sans-serif;margin:2rem auto;max-width:64rem;padding:0 1rem;color:#172030;background:#fafafa}button,input,select{font:inherit;padding:.5rem;margin:.3rem}button{cursor:pointer}label{display:block}article{border:1px solid #ccc;border-radius:.6rem;padding:1rem;margin:1rem 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}img{max-width:100%;max-height:60vh}nav{display:flex;gap:.4rem;flex-wrap:wrap}[hidden]{display:none!important}';

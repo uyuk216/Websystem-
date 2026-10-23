@@ -1,3 +1,5 @@
+import { runDueDangerous } from 'api/admin-dangerous';
+import { defaultDangerousHandlers } from 'api/admin-handlers';
 import { deleteAppStorage, processDeployment } from 'api/publish';
 import type { DynamicRuntime } from 'api/dynamic';
 import type { Db } from 'api/db';
@@ -29,6 +31,7 @@ export function defaultHandlers(deps?: WorkerDeps): Handlers {
     console.warn(`worker: no handler implemented for ${name}`);
   };
   return {
+    [JOBS.dangerousExecute]: deps ? async () => { await runDueDangerous(deps.db, defaultDangerousHandlers, deps.now?.() ?? new Date()); } : todo(JOBS.dangerousExecute),
     [JOBS.processDeployment]: deps ? makeProcessDeployment(deps) : todo(JOBS.processDeployment),
     [JOBS.deleteAppStorage]: deps ? makeDeleteAppStorage(deps) : todo(JOBS.deleteAppStorage),
     [JOBS.usageEvaluate]: deps ? makeUsageEvaluate(deps) : todo(JOBS.usageEvaluate),
