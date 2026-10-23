@@ -19,7 +19,9 @@
     "./database-backups": "./src/apps/database-backups.ts",
     "./verification-purge": "./src/verification/purge.ts",
     "./verification-review": "./src/verification/review.ts",
-    "./usage-state": "./src/usage/state.ts"
+    "./usage-state": "./src/usage/state.ts",
+    "./starter": "./src/grants/starter.ts",
+    "./event-boost": "./src/grants/event-boost.ts"
   },
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/server.ts",

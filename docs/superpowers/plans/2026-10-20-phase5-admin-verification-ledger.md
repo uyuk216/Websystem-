@@ -67,3 +67,11 @@
 - Task 6 の影響（E2E）: 付与がないと動的アプリ／DB は `plan_required`。`apps/web/e2e` の動的アプリと DB のテストは、サインアップの後に `grantStudent(email)`（`e2e/helpers.ts`）を呼ぶ。実体は新しい開発用スクリプト `pnpm --filter api admin:grant-student <email>`（`NODE_ENV=production` では拒否、2100 年 3 月末まで）。ルールは弱めていない。開発用の seed は元々ない。**Playwright の実行はこの環境（Chromium なし）では未確認**。
 - テスト: `shared/test/usage-state`（全イベント x 全理由の網羅、優先順位、境界）、`api/test/usage-state`（年度の切り替え → 猶予 → 停止 → 再登録で再開、同じ日の重なり 4 通りの順番、上位の理由が残る間の解除、取り消し、5/1 に再登録していない無料アプリだけ停止、3 月の案内の 1 回きり）、`worker/test/usage`。api 260 / shared 66 / worker 6 / static 35 全通過、`pnpm -r typecheck` / `lint` 通過。
 - 持ち越し・注意: `transfer.ts` は変更なし（転送量のブロックは状態と独立。静的サイトは停止・ブロックでも配信し続ける。凍結時の静的サイトの扱いは Task 10 で決める）。付与の取り消し・手動の操作から `transitionUsageState` を呼ぶのは Task 10（管理画面 API）。Starter の `suspend_on` が無い付与は終了の直後に停止になる（Task 8 で期間と停止日を決める）。既存の dev DB は `pnpm --filter api db:migrate`（0028）が必要。「卒業予定年を過ぎた人」は承認済みの最新の審査の卒業予定年で判定。受付開始の画面（再登録の導線）は Task 11。
+
+### Task 8: Starter Grant — 実装済み（未コミット）
+- 申請・審査・差し戻し、1 人 1 回の DB 制約、GitHub 作成日の注入可能な確認、任意 SMS の HMAC ハッシュ保存、14/3 日前の一度きりの通知、期限切れ時の停止評価と画面/API を実装。実 SMS/GitHub API 呼び出しなしのテスト。
+- 検証: API の専用テスト 21 件通過（Starter/Event Boost、実 SMS/GitHub API 接続なし）。`pnpm -r typecheck` と `pnpm -r lint` 通過。
+
+### Task 9: イベントブースト — 実装済み（未コミット）
+- 申請・審査、7 日/3 日前制約、期間重複拒否、転送量・メモリ・スリープ上書き、開始/終了時の稼働コンテナ再作成を実装。実行時間集計には既存 runtime-hours 経路を維持。
+- 検証: `packages/shared` 7 files / 66 tests、API 専用 2 files / 21 tests 通過。`pnpm -r typecheck` と `pnpm -r lint` 通過。

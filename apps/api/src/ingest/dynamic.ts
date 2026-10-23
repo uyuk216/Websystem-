@@ -7,6 +7,7 @@ import { createWriteStream } from 'node:fs';
 import { eq, sql } from 'drizzle-orm';
 import { DockerDatabaseDriver, DockerDriver, KubernetesDatabaseDriver, KubernetesDriver, type DatabaseDriver, buildImage, pushImage, collectLogs, detectStack, extractArchive, removeImage, waitHealthy, type AppRunSpec, type ArchiveFormat, type HealthOptions, type RuntimeDriver, type Storage } from 'platform';
 import { DYNAMIC_LIMITS } from 'shared';
+import { runLimitsFor } from '../apps/run-limits.js';
 import { withSystem, type Db } from '../db/client.js';
 import { getRunInputs } from '../apps/databases.js';
 import { apps, deployments } from '../db/schema.js';
@@ -101,19 +102,18 @@ function kubernetesDatabases(env: NodeJS.ProcessEnv, db: Db): DatabaseDriver {
   return new KubernetesDatabaseDriver({ ownerOf, ...(backupStore ? { backupStore } : {}) });
 }
 
-export const runLimits = { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids };
 
 /**
  * The run spec for a deployment (decrypted env + PORT), shared by the rollout and the edge waking a sleeping app.
  * Null when the deployment has no image (or does not belong to the app).
  */
-export async function buildRunSpec(db: Db, rt: DynamicRuntime, appId: string, deploymentId: string): Promise<AppRunSpec | null> {
+export async function buildRunSpec(db: Db, rt: DynamicRuntime, appId: string, deploymentId: string, at: Date = new Date()): Promise<AppRunSpec | null> {
   const [d] = await withSystem(db, (tx) => tx.select({ imageRef: deployments.imageRef, ownerId: apps.ownerId })
     .from(deployments).innerJoin(apps, eq(apps.id, deployments.appId))
     .where(sql`${deployments.id} = ${deploymentId} AND ${deployments.appId} = ${appId}`));
   if (!d?.imageRef) return null;
   const { env, networks } = await getRunInputs(db, rt, appId);
-  return { appId, deploymentId, ownerId: d.ownerId, image: d.imageRef, env: { ...env, PORT: String(CONTAINER_PORT) }, limits: runLimits, port: CONTAINER_PORT, networks };
+  return { appId, deploymentId, ownerId: d.ownerId, image: d.imageRef, env: { ...env, PORT: String(CONTAINER_PORT) }, limits: await runLimitsFor(db, d.ownerId, appId, at), port: CONTAINER_PORT, networks };
 }
 
 /**
@@ -158,7 +158,7 @@ export async function rolloutDynamic(db: Db, deploymentId: string, rt?: DynamicR
     const run = await getRunInputs(db, rt, appId);
     env = run.env;
     secrets = run.secrets;
-    await driver.start({ appId, deploymentId, ownerId: d.ownerId, image: imageRef, env: { ...env, PORT: String(CONTAINER_PORT) }, limits: runLimits, port: CONTAINER_PORT, networks: run.networks });
+    await driver.start({ appId, deploymentId, ownerId: d.ownerId, image: imageRef, env: { ...env, PORT: String(CONTAINER_PORT) }, limits: await runLimitsFor(db, d.ownerId, appId), port: CONTAINER_PORT, networks: run.networks });
     started = true;
     const health = await waitHealthy(driver, appId, deploymentId, rt.health);
     if (!health.ok) {

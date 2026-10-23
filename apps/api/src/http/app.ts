@@ -29,6 +29,10 @@ import { claimDelivery, deployPush, findPushTargets, parsePush, releaseDelivery,
 import { completeConnect, setGithub, startConnect } from '../github/link.js';
 import type { GithubClient } from '../github/client.js';
 import { getUsage } from '../usage/transfer.js';
+import { applyStarter, getStarterStatus, type ApplyError } from '../grants/starter.js';
+import { listEventBoosts, requestEventBoost, type RequestBoostError } from '../grants/event-boost.js';
+import { confirmSmsCode, requestSmsCode, type SmsVerifier } from '../verification/sms.js';
+import type { GithubAccountLookup } from '../verification/github-age.js';
 import { getAppLogs, listAccessLogs } from '../apps/logs.js';
 import { getRuntimeUsage } from '../usage/runtime-hours.js';
 import { createSession, listSessions, revokeSession } from '../auth/sessions.js';
@@ -56,6 +60,11 @@ export interface AppDeps {
   /** VPN / Tor detection for student ID submissions (phase 6 supplies the real IP database; default: allow all). */
   network?: NetworkReputation;
   trustedProxyHops?: number;
+  /**
+   * Starter Grant の申請（Task 8）。GitHub アカウントの作成日の確認は注入式（テストは偽物）。SMS 認証の差し替え口はプロバイダーが決まる
+   * フェーズ 8 まで未設定でよい（未設定なら SMS のルートは 503）。電話番号は保存せず、HMAC のハッシュ（`hashKey`）だけを重複確認に使う。
+   */
+  starter?: { githubAge: GithubAccountLookup; sms?: { verifier: SmsVerifier; hashKey: Buffer } };
   /** Object storage and job queue; deployment routes and storage cleanup are enabled when both are given. */
   storage?: Storage;
   queue?: JobQueue;
@@ -256,6 +265,39 @@ export function createApp(deps?: AppDeps): Hono {
         return r ? c.json({ uploadId: r.uploadId, accountId: r.accountId, expiresAt: r.expiresAt.toISOString() }) : c.json({ error: 'invalid_token' }, 400);
       });
     }
+    // Starter Grant: apply (GitHub linked + account age + optional SMS), view the status, and the SMS verification pair.
+    const starterStatus: Record<ApplyError, 400 | 403 | 404 | 409> = {
+      project: 400, github_login: 400, introduction: 400, github_not_linked: 403, github_not_found: 404, github_too_new: 403, sms_required: 403, already_used: 409, already_applied: 409,
+    };
+    app.get('/starter/status', session, async (c) => c.json(await getStarterStatus(deps.db, c.get('accountId'))));
+    if (deps.starter) {
+      const starter = deps.starter;
+      app.post('/starter/apply', cookieSession, rateLimit((c) => c.get('accountId'), 10, 3600), async (c) => {
+        const r = await applyStarter(deps.db, c.get('accountId'), await jsonBody(c), { githubAge: starter.githubAge });
+        return 'error' in r ? c.json({ error: r.error }, starterStatus[r.error]) : c.json({ applicationId: r.ok.applicationId });
+      });
+      const smsStatus = { invalid: 400, phone_in_use: 409, unavailable: 503 } as const;
+      app.post('/starter/sms/request', cookieSession, rateLimit((c) => c.get('accountId'), 5, 3600), async (c) => {
+        if (!starter.sms) return c.json({ error: 'unavailable' }, 503);
+        const r = await requestSmsCode(deps.db, c.get('accountId'), (await jsonBody(c))?.phone, starter.sms);
+        return 'error' in r ? c.json({ error: r.error }, smsStatus[r.error]) : c.json({ ok: true });
+      });
+      app.post('/starter/sms/confirm', cookieSession, rateLimit((c) => c.get('accountId'), 10, 3600), async (c) => {
+        if (!starter.sms) return c.json({ error: 'unavailable' }, 503);
+        const b = await jsonBody(c);
+        const r = await confirmSmsCode(deps.db, c.get('accountId'), b?.phone, b?.code, starter.sms);
+        return 'error' in r ? c.json({ error: r.error }, smsStatus[r.error]) : c.json({ ok: true });
+      });
+    }
+    // Event boost for a dynamic app (an operator approves it; see Task 10).
+    const boostStatus: Record<RequestBoostError, 400 | 403 | 404 | 409> = {
+      event_name: 400, period: 400, too_long: 400, too_late: 400, expected_visits: 400, not_found: 404, forbidden: 403, not_dynamic: 400, plan_required: 403, overlap: 409,
+    };
+    app.get('/apps/:id/boosts', session, async (c) => c.json({ boosts: await listEventBoosts(deps.db, c.get('accountId'), c.req.param('id')) }));
+    app.post('/apps/:id/boosts', cookieSession, rateLimit((c) => c.get('accountId'), 20, 3600), async (c) => {
+      const r = await requestEventBoost(deps.db, c.get('accountId'), c.req.param('id'), await jsonBody(c));
+      return 'error' in r ? c.json({ error: r.error }, boostStatus[r.error]) : c.json({ boostId: r.ok.boostId });
+    });
     app.get('/teams', session, async (c) => c.json({ teams: await listTeams(deps.db, c.get('accountId')) }));
     app.post('/teams', session, async (c) => {
       const b = await jsonBody(c);

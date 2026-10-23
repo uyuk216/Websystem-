@@ -1,6 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { t, type Locale } from 'i18n';
 import { STATIC_LIMITS } from 'shared';
+import { resolveEntitlements } from '../grants/entitlements.js';
 import { decryptEmail } from '../crypto/email.js';
 import { withAccount, withSystem, type Db } from '../db/client.js';
 import { accounts, apps, owners, teamMembers, transferUsage } from '../db/schema.js';
@@ -50,7 +51,18 @@ export function formatBytes(n: number): string {
 
 export function createTransferMeter(opts: TransferMeterOptions): TransferMeter {
   const { db } = opts;
-  const limit = opts.limitBytes ?? STATIC_LIMITS.monthlyTransferBytes;
+  // 上限はアプリごと（プランの設定の上書きと、イベントブースト中の上乗せ）。30 秒だけ覚える。`limitBytes` を渡すとそれを使う（テスト用）。
+  const limitCache = new Map<string, { bytes: number; at: number }>();
+  async function limitFor(appId: string): Promise<number> {
+    if (opts.limitBytes !== undefined) return opts.limitBytes;
+    const t0 = now().getTime();
+    const hit = limitCache.get(appId);
+    if (hit && t0 - hit.at < cacheMs) return hit.bytes;
+    const [a] = await withSystem(db, (tx) => tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId)));
+    const bytes = a ? (await resolveEntitlements(db, a.ownerId, now(), { appId })).static.monthlyTransferBytes : STATIC_LIMITS.monthlyTransferBytes;
+    limitCache.set(appId, { bytes, at: t0 });
+    return bytes;
+  }
   const now = opts.now ?? (() => new Date());
   const cacheMs = opts.limitCacheMs ?? LIMIT_CACHE_MS;
   // month -> appId -> bytes. Keyed by month so a flush after midnight cannot bill the wrong month.
@@ -80,6 +92,7 @@ export function createTransferMeter(opts: TransferMeterOptions): TransferMeter {
     for (const [month, perApp] of batch) {
       for (const [appId, bytes] of perApp) {
         try {
+          const limit = await limitFor(appId);
           const warn = await withSystem(db, async (tx) => {
             const [row] = await tx.insert(transferUsage).values({ appId, month, bytes })
               .onConflictDoUpdate({ target: [transferUsage.appId, transferUsage.month], set: { bytes: sql`${transferUsage.bytes} + excluded.bytes` } })
@@ -91,7 +104,7 @@ export function createTransferMeter(opts: TransferMeterOptions): TransferMeter {
               .returning({ appId: transferUsage.appId });
             return flipped.length > 0 ? row.bytes : null;
           });
-          if (warn !== null) notifyOwner(appId, warn);
+          if (warn !== null) notifyOwner(appId, warn, limit);
         } catch (e) {
           if ((e as { code?: string; cause?: { code?: string } }).code === '23503' || (e as { cause?: { code?: string } }).cause?.code === '23503') continue; // app deleted
           console.error('transfer flush failed', appId, e);
@@ -107,7 +120,7 @@ export function createTransferMeter(opts: TransferMeterOptions): TransferMeter {
     return flushing;
   }
 
-  function notifyOwner(appId: string, used: number): void {
+  function notifyOwner(appId: string, used: number, limit: number): void {
     const { mailer, emailKey } = opts;
     if (!mailer || !emailKey) return;
     // Fire-and-forget; Promise.resolve().then also catches synchronous throws.
@@ -143,7 +156,7 @@ export function createTransferMeter(opts: TransferMeterOptions): TransferMeter {
     const [row] = await withSystem(db, (tx) =>
       tx.select({ bytes: transferUsage.bytes }).from(transferUsage).where(and(eq(transferUsage.appId, appId), eq(transferUsage.month, month))));
     const total = (row?.bytes ?? 0) + (pending.get(month)?.get(appId) ?? 0);
-    const blocked = total >= limit;
+    const blocked = total >= (await limitFor(appId));
     cache.set(appId, { month, blocked, at });
     return blocked;
   }
@@ -180,10 +193,10 @@ export async function getUsage(db: Db, accountId: string, appId: string, at: Dat
   if (!UUID.test(appId)) return null;
   const month = monthKey(at);
   return withAccount(db, accountId, async (tx) => {
-    const [a] = await tx.select({ id: apps.id }).from(apps).where(eq(apps.id, appId));
+    const [a] = await tx.select({ id: apps.id, ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId));
     if (!a) return null;
     const [u] = await tx.select({ bytes: transferUsage.bytes }).from(transferUsage)
       .where(and(eq(transferUsage.appId, appId), eq(transferUsage.month, month)));
-    return { month, bytes: u?.bytes ?? 0, limitBytes: STATIC_LIMITS.monthlyTransferBytes };
-  });
+    return { month, bytes: u?.bytes ?? 0, ownerId: a.ownerId };
+  }).then(async (r) => (r ? { month: r.month, bytes: r.bytes, limitBytes: (await resolveEntitlements(db, r.ownerId, at, { appId })).static.monthlyTransferBytes } : null));
 }

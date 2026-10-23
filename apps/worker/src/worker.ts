@@ -4,6 +4,7 @@ import type { Db } from 'api/db';
 import { purgeVerifications } from 'api/verification-purge';
 import type { IdBlobStore } from 'api/verification-purge';
 import { evaluateDueOwners, sendReregistrationNotices } from 'api/usage-state';
+import { sendStarterNotices } from 'api/starter';
 import type { Mailer } from 'api/mailer';
 import { DEPLOY_RETRY_LIMIT, JOBS, type JobName, type PgBoss, type Storage } from 'platform';
 
@@ -53,8 +54,11 @@ const makeDeleteAppStorage = (d: { storage: Storage; runtime?: DynamicRuntime })
 const makeUsageEvaluate = (d: WorkerDeps): JobHandler => async () => {
   const now = d.now?.() ?? new Date();
   const n = await evaluateDueOwners(d.db, { now, driver: d.runtime?.driver, mailer: d.usage?.mailer, emailKey: d.usage?.emailKey });
-  const sent = d.usage?.mailer && d.usage.emailKey ? await sendReregistrationNotices(d.db, { now, mailer: d.usage.mailer, emailKey: d.usage.emailKey }) : 0;
-  if (n + sent > 0) console.log(`worker: usage evaluate owners=${n} reregistrationNotices=${sent}`);
+  const mail = d.usage?.mailer && d.usage.emailKey ? { mailer: d.usage.mailer, emailKey: d.usage.emailKey } : null;
+  const sent = mail ? await sendReregistrationNotices(d.db, { now, ...mail }) : 0;
+  // Starter Grant の終了の 14 日前・3 日前の予告（付与ごとに 1 回）。
+  const starter = mail ? await sendStarterNotices(d.db, { now, ...mail }) : 0;
+  if (n + sent + starter > 0) console.log(`worker: usage evaluate owners=${n} reregistrationNotices=${sent} starterNotices=${starter}`);
 };
 
 const makeVerificationPurge = (d: { db: Db; store: IdBlobStore; mailer?: Mailer; emailKey?: Buffer }): JobHandler => async () => {

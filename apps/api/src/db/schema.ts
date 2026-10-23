@@ -416,3 +416,71 @@ export const usageStates = pgTable('usage_states', {
   reregNotifiedFor: text('rereg_notified_for'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('usage_states_next_idx').on(t.nextEvaluateAt)]);
+
+/**
+ * Starter Grant の申請（フェーズ 5 Task 8）。1 人につき進行中（pending / approved）は 1 件だけ（部分一意索引）。
+ * 利用者は自分の申請を読める・pending で作れるだけ。承認・差し戻しはシステム側（owner）と管理側だけ。
+ */
+export const starterApplications = pgTable('starter_applications', {
+  id: id(),
+  accountId: uuid('account_id').notNull().references(() => accounts.id),
+  project: text('project').notNull(),
+  githubLogin: text('github_login').notNull(),
+  introduction: text('introduction').notNull(),
+  status: text('status', { enum: ['pending', 'approved', 'rejected'] }).notNull().default('pending'),
+  /** 申請時に確認した GitHub アカウントの作成日。 */
+  githubCreatedAt: timestamp('github_created_at', { withTimezone: true }).notNull(),
+  rejectReason: text('reject_reason'),
+  reviewedBy: text('reviewed_by'),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  grantId: uuid('grant_id'),
+  createdAt: createdAt(),
+}, (t) => [
+  uniqueIndex('starter_applications_live_idx').on(t.accountId).where(sql`${t.status} IN ('pending', 'approved')`),
+  check('starter_applications_lengths_check', sql`char_length(${t.project}) between 1 and 1000 AND char_length(${t.githubLogin}) between 1 and 39 AND char_length(${t.introduction}) between 1 and 2000`),
+]);
+
+/** SMS 認証済みの電話番号の HMAC ハッシュ（重複確認だけに使う。番号そのものはどこにも保存しない）。owner ロールだけ。 */
+export const smsHashes = pgTable('sms_hashes', {
+  hash: text('hash').primaryKey(),
+  accountId: uuid('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  createdAt: createdAt(),
+}, (t) => [index('sms_hashes_account_idx').on(t.accountId)]);
+
+/** Starter の終了予告を送った記録（付与ごと・種類ごとに 1 回）。owner ロールだけ。 */
+export const starterNotices = pgTable('starter_notices', {
+  grantId: uuid('grant_id').notNull().references(() => grants.id, { onDelete: 'cascade' }),
+  kind: text('kind', { enum: ['d14', 'd3'] }).notNull(),
+  sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.grantId, t.kind] })]);
+
+/**
+ * イベントブーストの申請（フェーズ 5 Task 9）。アプリ単位。承認すると `grants`（kind = event_boost、target = app）ができ、
+ * 期間中だけ `resolveEntitlements(owner, at, { appId })` が転送量・メモリ・スリープを上乗せする。
+ * `applied_at` / `restored_at` はワーカーがコンテナを作り直した印（期間の頭と終わりに 1 回ずつ）。
+ */
+export const eventBoosts = pgTable('event_boosts', {
+  id: id(),
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  ownerId: uuid('owner_id').notNull().references(() => owners.id, { onDelete: 'cascade' }),
+  requestedBy: uuid('requested_by').notNull().references(() => accounts.id),
+  eventName: text('event_name').notNull(),
+  startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
+  endsAt: timestamp('ends_at', { withTimezone: true }).notNull(),
+  expectedVisits: integer('expected_visits').notNull(),
+  status: text('status', { enum: ['requested', 'approved', 'rejected'] }).notNull().default('requested'),
+  extraTransferBytes: bigint('extra_transfer_bytes', { mode: 'number' }),
+  extraMemoryMb: integer('extra_memory_mb'),
+  grantId: uuid('grant_id'),
+  rejectReason: text('reject_reason'),
+  reviewedBy: text('reviewed_by'),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  appliedAt: timestamp('applied_at', { withTimezone: true }),
+  restoredAt: timestamp('restored_at', { withTimezone: true }),
+  createdAt: createdAt(),
+}, (t) => [
+  index('event_boosts_app_idx').on(t.appId, t.startsAt),
+  index('event_boosts_status_idx').on(t.status, t.endsAt),
+  check('event_boosts_period_check', sql`${t.endsAt} > ${t.startsAt}`),
+  check('event_boosts_name_check', sql`char_length(${t.eventName}) between 1 and 100 AND ${t.expectedVisits} >= 0`),
+]);

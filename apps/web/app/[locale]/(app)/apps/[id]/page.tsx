@@ -123,6 +123,7 @@ export default function AppPage() {
       {error && <p role="alert" className="error">{error}</p>}
       <p>{t('apps.siteUrl')}: <a href={url} data-testid="site-url" target="_blank" rel="noreferrer">{url}</a></p>
       {app.kind === 'dynamic' && <DynamicPanel id={app.id} active={app.activeDeploymentId !== null} statusLabel={t(app.activeDeploymentId ? 'deploy.status.live' : 'dyn.status.none')} />}
+      {app.kind === 'dynamic' && <p><a href={`/${locale}/apps/${app.id}/boost`}>{t('boost.title')}</a></p>}
       {app.kind === 'dynamic' && <DatabasePanel id={app.id} name={app.name} />}
       {app.kind !== 'dynamic' && usage && <p className="muted">{t('apps.usage')}: {(usage.bytes / 1048576).toFixed(1)} / {(usage.limitBytes / 1048576).toFixed(0)} MB</p>}
 

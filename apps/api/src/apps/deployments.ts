@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { Transform, type Readable } from 'node:stream';
 import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { BUCKETS, JOBS, appPrefix, collectLogs, waitHealthy, type ArchiveFormat, type Storage } from 'platform';
-import { DYNAMIC_LIMITS, STATIC_LIMITS } from 'shared';
+import { STATIC_LIMITS } from 'shared';
+import { runLimitsFor } from './run-limits.js';
 import { UUID } from '../auth/cross-device.js';
 import { withAccount, withSystem, type Db, type Tx } from '../db/client.js';
 import { apps, deployments } from '../db/schema.js';
@@ -197,7 +198,7 @@ export async function rollback(
         const { env, networks, secrets } = await getRunInputs(db, rt, appId);
         await rt.driver.start({
           appId, deploymentId, ownerId: pre.ownerId, image: imageRef, env: { ...env, PORT: String(CONTAINER_PORT) },
-          limits: { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids }, port: CONTAINER_PORT, networks,
+          limits: await runLimitsFor(db, pre.ownerId, appId), port: CONTAINER_PORT, networks,
         });
         started = true;
         const health = await waitHealthy(rt.driver, appId, deploymentId, rt.health);
@@ -269,7 +270,7 @@ export async function restart(
       await rt.driver.stopDeployment(appId, pre.deploymentId);
       await rt.driver.start({
         appId, deploymentId: pre.deploymentId, ownerId: pre.ownerId, image: pre.imageRef, env: { ...env, PORT: String(CONTAINER_PORT) },
-        limits: { memoryMb: DYNAMIC_LIMITS.memoryMb, cpu: DYNAMIC_LIMITS.cpu, pids: DYNAMIC_LIMITS.pids }, port: CONTAINER_PORT, networks,
+        limits: await runLimitsFor(db, pre.ownerId, appId), port: CONTAINER_PORT, networks,
       });
       const health = await waitHealthy(rt.driver, appId, pre.deploymentId, rt.health);
       if (!health.ok) {

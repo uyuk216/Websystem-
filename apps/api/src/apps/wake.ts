@@ -3,6 +3,7 @@ import type { RuntimeDriver } from 'platform';
 import { DYNAMIC_LIMITS } from 'shared';
 import { createDb, withSystem, type Db } from '../db/client.js';
 import { apps, deployments } from '../db/schema.js';
+import { resolveEntitlements } from '../grants/entitlements.js';
 
 export type LiveApp =
   | { kind: 'static'; appId: string; siteKey: string }
@@ -63,11 +64,13 @@ export async function sleepIdleApps(db: Db, driver: RuntimeDriver, now: Date = n
   if (running.length === 0) return [];
   const cutoff = new Date(now.getTime() - idleMinutes * 60_000);
   const idle = (cond: ReturnType<typeof sql>) => sql`${apps.kind} = 'dynamic' AND ${cond}`;
-  const candidates = await withSystem(db, (tx) => tx.select({ id: apps.id, active: apps.activeDeploymentId }).from(apps)
+  const candidates = await withSystem(db, (tx) => tx.select({ id: apps.id, active: apps.activeDeploymentId, ownerId: apps.ownerId }).from(apps)
     .where(and(inArray(apps.id, running), idle(sql`(${apps.lastAccessAt} IS NULL OR ${apps.lastAccessAt} < ${cutoff.toISOString()}::timestamptz)`))));
   const stopped: string[] = [];
-  for (const { id, active } of candidates) {
+  for (const { id, active, ownerId } of candidates) {
     try {
+      // イベントブースト中のアプリはスリープしない（期間が終われば次の巡回から通常に戻る）。
+      if ((await resolveEntitlements(db, ownerId, now, { appId: id })).dynamic.sleepAfterMinutes === null) continue;
       const did = await withSystem(db, async (tx) => {
         const [lock] = await tx.execute<{ ok: boolean }>(sql`SELECT pg_try_advisory_xact_lock(hashtextextended(${`wake:${id}`}, 0)) AS ok`);
         if (!lock?.ok) return false;

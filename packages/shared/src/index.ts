@@ -18,3 +18,8 @@ export { endOfMarchJst, assessEligibility } from './verification-rules.js';
 export type { EligibilityVerdict } from './verification-rules.js';
 export { USAGE_STATES, USAGE_REASONS, USAGE_EVENTS, TIME_REASONS, stateOf, isStoppedState, isTimeEvent, timeReasonFor, applyUsageEvent, nextEvaluationAt, reregistrationFiscalKey } from './usage-state.js';
 export type { UsageState, UsageReason, UsageEvent, GrantFacts, UsageSnapshot } from './usage-state.js';
+export {
+  STARTER_DEFAULT_MIN_GITHUB_AGE_DAYS, STARTER_MAX_PERIOD_DAYS, STARTER_NOTICE_DAYS, GITHUB_LOGIN_RE, validateStarterInput, normalizePhone,
+  EVENT_BOOST_MAX_DAYS, EVENT_BOOST_LEAD_DAYS, EVENT_BOOST_MAX_VISITS, validateBoostRequest,
+} from './starter.js';
+export type { StarterInput, StarterInputError, BoostRequestInput, BoostRequestError } from './starter.js';

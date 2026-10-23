@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { withTestDb, type TestDb } from './helpers/db.js';
 import { assertOwnerBypassesRls, withAccount, withSystem } from '../src/db/client.js';
-import { accounts, emailChallenges, loginEvents, owners, passkeys, sessions, studentVerifications, teamInvites, teamMembers, teams, verificationUploads } from '../src/db/schema.js';
+import { accounts, emailChallenges, loginEvents, owners, passkeys, sessions, studentVerifications, teamInvites, teamMembers, teams, verificationUploads, starterApplications, smsHashes, starterNotices, eventBoosts, apps, grants } from '../src/db/schema.js';
 
 const acct = (h: string) => ({ emailHash: h, emailEnc: 'e', displayName: h, locale: 'ja', adultFrom: '2030-01' });
 
@@ -195,5 +195,40 @@ describe('row level security: student verifications', () => {
       });
       // And another account cannot attach an upload to it.
       await expect(withAccount(db, b.id, (tx) => tx.insert(verificationUploads).values({ ...up, tokenHash: 'y' }))).rejects.toThrow();
+    }));
+});
+
+describe('row level security: starter applications, sms hashes, event boosts', () => {
+  const app = { project: 'p', githubLogin: 'g', introduction: 'i', githubCreatedAt: new Date('2020-01-01') };
+  it('shows a starter application only to its owner; users cannot approve, edit or delete; hashes and notices are system-only', () =>
+    withTestDb(async (db) => {
+      const { a, b } = await seed(db);
+      const [row] = await db.insert(starterApplications).values({ ...app, accountId: a.id }).returning();
+      await db.insert(starterApplications).values({ ...app, accountId: b.id });
+      await withAccount(db, a.id, async (tx) => { expect((await tx.select().from(starterApplications)).map((r) => r.id)).toEqual([row!.id]); });
+      await expect(withAccount(db, a.id, (tx) => tx.insert(starterApplications).values({ ...app, accountId: b.id }))).rejects.toThrow();
+      await expect(withAccount(db, b.id, (tx) => tx.insert(starterApplications).values({ ...app, accountId: b.id, status: 'approved' }))).rejects.toThrow();
+      await expect(withAccount(db, a.id, (tx) => tx.update(starterApplications).set({ status: 'approved' }).where(eq(starterApplications.id, row!.id)))).rejects.toThrow();
+      await expect(withAccount(db, a.id, (tx) => tx.delete(starterApplications).where(eq(starterApplications.id, row!.id)))).rejects.toThrow();
+      await db.insert(smsHashes).values({ hash: 'h', accountId: a.id });
+      await expect(withAccount(db, a.id, (tx) => tx.select().from(smsHashes))).rejects.toThrow();
+      await expect(withAccount(db, a.id, (tx) => tx.select().from(starterNotices))).rejects.toThrow();
+    }));
+
+  it('shows an event boost only to people who can see the app and lets them create only a plain request', () =>
+    withTestDb(async (db) => {
+      const { a, b } = await seed(db);
+      const [oa] = await db.insert(owners).values({ kind: 'account', accountId: a.id }).returning();
+      const [ap] = await db.insert(apps).values({ ownerId: oa!.id, name: 'boosted', kind: 'dynamic' }).returning();
+      const boost = { appId: ap!.id, ownerId: oa!.id, requestedBy: a.id, eventName: 'e', startsAt: new Date('2027-03-01'), endsAt: new Date('2027-03-02'), expectedVisits: 1 };
+      const [r] = await withAccount(db, a.id, (tx) => tx.insert(eventBoosts).values(boost).returning());
+      await withAccount(db, b.id, async (tx) => { expect(await tx.select().from(eventBoosts)).toHaveLength(0); });
+      await expect(withAccount(db, b.id, (tx) => tx.insert(eventBoosts).values({ ...boost, requestedBy: b.id }))).rejects.toThrow();
+      await expect(withAccount(db, a.id, (tx) => tx.insert(eventBoosts).values({ ...boost, startsAt: new Date('2027-04-01'), endsAt: new Date('2027-04-02'), status: 'approved' }))).rejects.toThrow();
+      await expect(withAccount(db, a.id, (tx) => tx.update(eventBoosts).set({ status: 'approved' }).where(eq(eventBoosts.id, r!.id)))).rejects.toThrow();
+      // The grant it creates is readable by the owner of the app but never writable by users.
+      await db.insert(grants).values({ targetKind: 'app', targetId: ap!.id, kind: 'event_boost', startsAt: new Date('2027-03-01'), endsAt: new Date('2027-03-02'), approvedBy: 'system' });
+      await withAccount(db, a.id, async (tx) => { expect(await tx.select().from(grants)).toHaveLength(1); });
+      await withAccount(db, b.id, async (tx) => { expect(await tx.select().from(grants)).toHaveLength(0); });
     }));
 });

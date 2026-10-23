@@ -7,6 +7,7 @@ import { startRuntimeMetering } from 'api/runtime-hours';
 import { startDatabaseWatch } from 'api/database-watch';
 import { startScheduledBackups } from 'api/database-backups';
 import { createMailer } from 'api/mailer';
+import { reconcileEventBoosts } from 'api/event-boost';
 import { defaultHandlers, registerHandlers } from './worker.js';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -45,6 +46,13 @@ if (runtime) {
   const sleepTick = () => sleepIdleApps(db, runtime.driver).then((ids) => { for (const id of ids) console.log(`worker: app ${id} went to sleep`); }, (e: unknown) => console.error('worker: sleep sweep failed', e));
   const sleepTimer = setInterval(() => void sleepTick(), 60_000);
   sleepTimer.unref();
+}
+
+// Event boosts: at the start and the end of a boost period running containers are recreated with the current limits (memory).
+if (runtime) {
+  const boostTick = () => reconcileEventBoosts(db, runtime).then((n) => { if (n > 0) console.log(`worker: event boost recreated ${n} app(s)`); }, (e: unknown) => console.error('worker: event boost sweep failed', e));
+  const boostTimer = setInterval(() => void boostTick(), 60_000);
+  boostTimer.unref();
 }
 
 // Runtime-hour metering: one tick per minute (idempotent per app-minute, so several workers do not double count).
