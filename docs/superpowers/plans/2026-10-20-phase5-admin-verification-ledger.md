@@ -92,3 +92,5 @@
 
 ## Phase 5 の完了状態
 - **Tasks 1–11 の実装完了。ブラウザ E2E の実行・確認は未完了。** 実装完了とブラウザでの確認完了は別として扱う。
+
+- 2026-10-23: E2E 確認済み。web 20/20、upload 4/4 が Chromium で通過。playwright.config は CHROMIUM_PATH 未設定なら Playwright 同梱の Chromium を使うよう変更。
