@@ -24,3 +24,8 @@ export * from './verification/manual.js';
 export * from './security/telemetry.js';
 export * from './security/falco.js';
 export * from './security/egress.js';
+export * from './security/network-data.js';
+export * from './security/network-reputation.js';
+export * from './security/honeytokens.js';
+export * from './security/db-audit.js';
+export * from './security/audit-storage.js';

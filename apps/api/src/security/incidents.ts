@@ -17,6 +17,9 @@ export interface SignalResult {
   blockCreated: boolean;
 }
 
+/** 罠の使用は最優先の運営通知にする。探索の集約（scan.*）では最優先キューを埋めない。 */
+const urgentTrap = (i: { source: string; reasonCode: string }): boolean => i.source === 'honeytoken' && !i.reasonCode.startsWith('scan.');
+
 /** 追記専用のシステム監査連鎖へ 1 行足す。呼び出しの transaction 内で書くので、失敗すれば事件ごと rollback する。 */
 export async function appendSecurityAudit(tx: Tx, incidentId: string, action: string, detail: Record<string, string | number | boolean>): Promise<void> {
   const [row] = await tx.insert(securityAudit).values({ seq: 0, /* trigger が決める */ incidentId, action, detail }).returning({ seq: securityAudit.seq });
@@ -104,9 +107,9 @@ export async function handleSecuritySignal(db: Db, signal: SecuritySignal, opts:
       await enqueueOutbox(tx, { incidentId: incident.id, kind: 'stop_app', effectKey: `stop_app:${incident.id}`, payload: { appId: incident.appId }, now });
     }
     if (plan.notifyOperator) {
-      await enqueueOutbox(tx, { incidentId: incident.id, kind: 'notify_operator', effectKey: `notify_operator:${incident.id}:${incident.severity}`, payload: { severity: incident.severity }, priority: incident.source === 'honeytoken' ? 100 : 0, now });
+      await enqueueOutbox(tx, { incidentId: incident.id, kind: 'notify_operator', effectKey: `notify_operator:${incident.id}:${incident.severity}`, payload: { severity: incident.severity }, priority: urgentTrap(incident) ? 100 : 0, now });
     }
-    if (incident.targetKind !== 'ip' && incident.severity !== 'low') await enqueueOutbox(tx, { incidentId: incident.id, kind: 'notify_owner', effectKey: `notify_owner:${incident.id}:${incident.severity}`, priority: incident.source === 'honeytoken' ? 100 : 0, now });
+    if (incident.targetKind !== 'ip' && incident.severity !== 'low') await enqueueOutbox(tx, { incidentId: incident.id, kind: 'notify_owner', effectKey: `notify_owner:${incident.id}:${incident.severity}`, priority: urgentTrap(incident) ? 100 : 0, now });
     return { incidentId: incident.id, duplicate: false, escalated, severity: incident.severity, blockCreated };
   });
 }

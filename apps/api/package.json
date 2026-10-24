@@ -35,12 +35,14 @@
     "./security-detectors": "./src/security/detectors.ts",
     "./security-thresholds": "./src/security/thresholds.ts",
     "./security-browsing": "./src/security/safe-browsing.ts",
-    "./security-distribution": "./src/security/file-distribution.ts"
+    "./security-distribution": "./src/security/file-distribution.ts",
+    "./security-audit": "./src/security/system-audit.ts"
   },
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/server.ts",
     "start": "node --env-file-if-exists=../../.env.development --import tsx src/server.ts",
     "db:generate": "drizzle-kit generate",
+    "security:verify-audit": "node --env-file-if-exists=../../.env.development --import tsx src/scripts/verify-security-audit.ts",
     "admin:purge": "node --env-file-if-exists=../../.env.development --import tsx src/scripts/purge.ts",
     "admin:purge-login-events": "pnpm admin:purge",
     "admin:grant-student": "node --env-file-if-exists=../../.env.development --import tsx src/scripts/grant-student.ts",

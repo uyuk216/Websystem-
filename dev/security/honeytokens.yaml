@@ -1,0 +1,11 @@
+# Placement descriptors only (adapter contract, not a deployment). No values, hostnames of real systems or credentials appear here.
+# Values are generated at an approved deployment (generateHoneytokenValue) and only their HMAC is registered.
+placements:
+  - { kind: fake_env_key, detections: [fake_auth, file_read], location: "config / env / container image (fake key only)" }
+  - { kind: decoy_admin_row, detections: [db_audit], location: "main DB decoy relation; no operators/passkeys/sessions" }
+  - { kind: decoy_student_row, detections: [db_audit], location: "PII DB decoy relation; synthetic, outside submission/grant/mail/7-day deletion" }
+  - { kind: fake_repo_key, detections: [fake_auth], location: "deep repo working copy / backup decoy object" }
+  - { kind: decoy_internal_url, detections: [decoy_endpoint], location: "/_int/<placementId> on the main origin" }
+  - { kind: decoy_dotenv, detections: [decoy_endpoint, fake_auth], location: "GET /.env on the main domain only, no-store" }
+  - { kind: decoy_admin_login, detections: [decoy_form], location: "/admin/login on the main domain; POST input fires, body discarded" }
+fake_auth_endpoint: /decoy/auth

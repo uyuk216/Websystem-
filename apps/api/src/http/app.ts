@@ -23,7 +23,8 @@ import { Readable } from 'node:stream';
 import { bodyLimit } from 'hono/body-limit';
 import { JOBS, type Storage } from 'platform';
 import type { DynamicRuntime } from '../ingest/dynamic.js';
-import { STATIC_LIMITS, allowAllNetworks, type NetworkReputation } from 'shared';
+import { mountDecoys, type DecoyConfig } from '../security/decoys.js';
+import { STATIC_LIMITS, decideNetworkAction, unconfiguredNetworks, withNetworkMode, type NetworkReputation } from 'shared';
 import { timingSafeEqual } from 'node:crypto';
 import { consumeUploadToken, startVerification, type StartError } from '../verification/submissions.js';
 import { createDeployment, listDeployments, restart, rollback, type JobQueue } from '../apps/deployments.js';
@@ -70,6 +71,8 @@ export interface AppDeps {
   trustedProxyHops?: number;
   /** 自動対処の遮断（フェーズ 6）。IP のブロックは入口で、アカウントのブロックは認証後の変更系で適用する。`hashKey` は IP の HMAC 鍵。 */
   security?: { hashKey: Buffer };
+  /** ハニートークンの罠（本体の公開ドメイン限定）。`security` が必要。未設定なら罠は出ない。 */
+  decoys?: DecoyConfig;
   /**
    * Starter Grant の申請（Task 8）。GitHub アカウントの作成日の確認は注入式（テストは偽物）。SMS 認証の差し替え口はプロバイダーが決まる
    * フェーズ 8 まで未設定でよい（未設定なら SMS のルートは 503）。電話番号は保存せず、HMAC のハッシュ（`hashKey`）だけを重複確認に使う。
@@ -114,6 +117,8 @@ export function createApp(deps?: AppDeps): Hono {
     }
     return resolveClientIp(c.req.header('x-forwarded-for'), addr, hops);
   };
+  // 既定は未導入（unknown）を observe で包む：保護対象も通すが観測は残る。allowAllNetworks を本番の既定にしない。
+  const netRep: NetworkReputation = deps?.network ?? withNetworkMode(unconfiguredNetworks, 'observe');
   const app = new Hono();
   if (deps?.security) {
     const { hashKey } = deps.security;
@@ -130,6 +135,7 @@ export function createApp(deps?: AppDeps): Hono {
       await next();
     });
   }
+  if (deps?.security && deps.decoys) mountDecoys(app, { db: deps.db, hashKey: deps.security.hashKey, clientIp, decoys: deps.decoys });
   // Per-browser device id; requesterDeviceId for email challenges comes from it.
   app.use('*', async (c, next) => {
     let id = getCookie(c, DEVICE_COOKIE);
@@ -226,6 +232,9 @@ export function createApp(deps?: AppDeps): Hono {
       return c.json({ ok: true });
     });
     app.post('/auth/signup', attemptLimit, async (c) => {
+      // 登録は VPN / proxy / Tor を拒否する保護対象。判定不能は 503。拒否時は account も session も作らない。
+      const net = decideNetworkAction('signup', await netRep.check(clientIp(c)));
+      if (!net.allow) return c.json({ error: net.reason === 'unknown' ? 'network_unavailable' : 'network_blocked' }, net.status);
       const b = await c.req.json().catch(() => null) as Record<string, unknown> | null;
       // Either the 6-digit code or the mailed link token proves the email.
       const byLink = str(b?.linkToken, 200);
@@ -312,10 +321,10 @@ export function createApp(deps?: AppDeps): Hono {
       c.header('Cache-Control', 'no-store');
       return c.json(await getVerificationStatus(deps.db, c.get('accountId')));
     });
-    const verificationStatus: Record<StartError, 400 | 403 | 409> = { school_name: 400, school_kind: 400, graduation_year: 400, network_blocked: 403, already_verified: 409 };
+    const verificationStatus: Record<StartError, 400 | 403 | 409 | 503> = { school_name: 400, school_kind: 400, graduation_year: 400, network_blocked: 403, network_unavailable: 503, already_verified: 409 };
     app.post('/verification/start', cookieSession, rateLimit((c) => c.get('accountId'), 10, 3600), async (c) => {
       const r = await startVerification(deps.db, c.get('accountId'), await jsonBody(c), {
-        network: deps.network ?? allowAllNetworks, ip: clientIp(c), uploadOrigin: deps.config.uploadOrigin ?? 'http://localhost:5174',
+        network: netRep, ip: clientIp(c), uploadOrigin: deps.config.uploadOrigin ?? 'http://localhost:5174',
         locale: asLocale(c.req.query('locale')),
       });
       if ('error' in r) return c.json({ error: r.error }, verificationStatus[r.error]);

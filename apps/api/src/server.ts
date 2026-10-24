@@ -10,6 +10,7 @@ import { createWakeLocker } from './apps/wake.js';
 import { createMailer } from './mail/mailer.js';
 import { createGithubAccountLookup } from './verification/github-age.js';
 import { loadSecurityKey } from './security/config.js';
+import { createNetworkGuard } from './security/network.js';
 
 const config = loadConfig(process.env);
 const { db } = createDb(config.databaseUrl);
@@ -23,6 +24,7 @@ const runtime = createDynamicRuntime(process.env, { db });
 if (runtime) runtime.lock = createWakeLocker(config.databaseUrl, 4).lock;
 const app = createApp({ db, runtime, mailer, config, trustedProxyHops: config.trustedProxyHops, storage, queue, uploadMaxBytes: config.uploadMaxBytes,
   security: { hashKey: loadSecurityKey(process.env) },
+  network: createNetworkGuard(process.env).reputation,
   // SMS 認証のプロバイダーはフェーズ 8。それまで `sms` は渡さない（SMS のルートは 503）。
   starter: { githubAge: createGithubAccountLookup() },
   github: config.github && { webhookSecret: config.github.webhookSecret, client: createGithubClient(config.github) },

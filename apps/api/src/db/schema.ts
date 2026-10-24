@@ -573,6 +573,24 @@ export const securityAudit = pgTable('security_audit', {
   hash: text('hash').notNull().default(''),
 });
 
+/** WORM（Object Lock）配送の記録。範囲・digest・保管先の版・保持期限・checkpoint の版だけ（内容は持たない）。 */
+export const auditDeliveries = pgTable('audit_deliveries', {
+  id: id(),
+  stream: text('stream', { enum: ['security', 'admin'] }).notNull(),
+  fromSeq: bigint('from_seq', { mode: 'number' }).notNull(),
+  toSeq: bigint('to_seq', { mode: 'number' }).notNull(),
+  prevBatchDigest: text('prev_batch_digest').notNull(),
+  digest: text('digest').notNull(),
+  objectKey: text('object_key').notNull(),
+  objectVersion: text('object_version'),
+  retainUntil: timestamp('retain_until', { withTimezone: true }),
+  checkpointVersion: text('checkpoint_version'),
+  createdAt: createdAt(),
+  deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+  attempts: integer('attempts').notNull().default(0),
+  failureCode: text('failure_code'),
+}, (t) => [uniqueIndex('audit_deliveries_from_uq').on(t.stream, t.fromSeq), uniqueIndex('audit_deliveries_to_uq').on(t.stream, t.toSeq)]);
+
 /** Private recovery records; accessed only through authenticated security services. */
 export const securityAppeals = pgTable('security_appeals', {
   id: id(), incidentId: uuid('incident_id').notNull().references(() => securityIncidents.id),

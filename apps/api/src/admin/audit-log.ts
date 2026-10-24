@@ -15,6 +15,11 @@ export interface AuditEntry {
   detail?: Record<string, unknown>;
 }
 
+export class AuditHoldError extends Error { constructor() { super('audit_backlog_hold'); this.name = 'AuditHoldError'; } }
+let adminHold: (() => Promise<boolean>) | null = null;
+/** WORM 配送がたまりすぎたとき管理変更を保留する判定を登録する（未登録＝保留しない。配送が未導入のうちは登録しない）。既存の遮断は影響を受けない。 */
+export function setAdminAuditHold(fn: (() => Promise<boolean>) | null): void { adminHold = fn; }
+
 async function insertAudit(tx: Tx, operatorId: string, e: AuditEntry): Promise<void> {
   await tx.insert(adminAuditLog).values({ seq: 0, /* assigned by the chain trigger */ operatorId, action: e.action, target: e.target, detail: e.detail ?? {} });
 }
@@ -28,6 +33,7 @@ async function insertAudit(tx: Tx, operatorId: string, e: AuditEntry): Promise<v
  */
 export async function withAdmin<T>(db: Db, operator: Pick<Operator, 'accountId'>, entry: AuditEntry, fn: (tx: Tx, ctx: AuditContext) => Promise<T>): Promise<T> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operator.accountId)) throw new Error('withAdmin: invalid operator id');
+  if (adminHold && (await adminHold().catch(() => false))) throw new AuditHoldError();
   return db.transaction(async (tx) => {
     await tx.execute(sql`set local role platform_admin`);
     await tx.execute(sql`select set_config('app.operator_id', ${operator.accountId}, true)`);

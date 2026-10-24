@@ -5,7 +5,7 @@ import { withAccount, withSystem, type Db } from '../db/client.js';
 import { studentVerifications, verificationUploads } from '../db/schema.js';
 import { buildUploadUrl, generateUploadToken, hashUploadToken, isUploadTokenShape } from './upload-url.js';
 
-export type StartError = VerificationInputError | 'network_blocked' | 'already_verified';
+export type StartError = VerificationInputError | 'network_blocked' | 'network_unavailable' | 'already_verified';
 
 export interface StartResult {
   verificationId: string;
@@ -28,7 +28,7 @@ export async function startVerification(
   const input = validateVerificationInput(raw, now);
   if ('error' in input) return input;
   const verdict = await deps.network.check(deps.ip);
-  if (verdict.blocked) return { error: 'network_blocked' };
+  if (verdict.blocked) return { error: verdict.reason === 'unknown' ? 'network_unavailable' : 'network_blocked' };
 
   return withAccount(db, accountId, async (tx) => {
     const rows = await tx.select().from(studentVerifications)

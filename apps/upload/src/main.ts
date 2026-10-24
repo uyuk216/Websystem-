@@ -1,5 +1,6 @@
 import { createPiiPool, handleIdUpload, type IngestToken } from 'platform/pii';
 import { buildClientAssets } from './client-build.js';
+import { decideNetworkAction, forwardedClientIp, parseNetworkMode, unconfiguredNetworks, withNetworkMode } from 'shared';
 import { createUploadServer } from './server.js';
 
 function required(name: string): string {
@@ -25,7 +26,15 @@ async function consumeToken(token: string): Promise<IngestToken | null> {
   return { uploadId: b.uploadId, accountId: b.accountId, expiresAt: new Date(b.expiresAt) };
 }
 
+// 未導入の既定は observe（通す）。データ導入・承認後に SECURITY_NETWORK_MODE=enforce。信頼する proxy 段数は明示した時だけ使う。
+const network = withNetworkMode(unconfiguredNetworks, parseNetworkMode(process.env.SECURITY_NETWORK_MODE));
+const hops = Number(process.env.UPLOAD_TRUSTED_PROXY_HOPS ?? 0);
 const server = createUploadServer({
+  networkGuard: async (req) => {
+    const ip = forwardedClientIp(req.headers['x-forwarded-for'] as string | undefined, req.socket.remoteAddress, hops) ?? 'unknown';
+    const d = decideNetworkAction('id_upload', await network.check(ip));
+    return d.allow ? null : { status: d.status, error: d.reason === 'unknown' ? 'network_unavailable' : 'network_blocked' };
+  },
   assets: await buildClientAssets(),
   recipientPublicKeyB64,
   // The log line carries the event, status and size only.

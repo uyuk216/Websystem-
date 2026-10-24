@@ -1,4 +1,4 @@
-import { createIdBlobStore, createPiiPool, createQueue, createStorage, JOBS, loadStorageConfig, startQueue } from 'platform';
+import { disabledAuditStorage, createIdBlobStore, createPiiPool, createQueue, createStorage, JOBS, loadStorageConfig, startQueue } from 'platform';
 import { createDb } from 'api/db';
 import { sweepStaleDeployments } from 'api/publish';
 import { createDynamicRuntime } from 'api/dynamic';
@@ -10,6 +10,7 @@ import { createMailer } from 'api/mailer';
 import { reconcileEventBoosts } from 'api/event-boost';
 import { drainSecurityOutbox, stopAppHandlers } from 'api/security-actions';
 import { notificationHandlers } from 'api/security-notifications';
+import { auditDeliveryHandlers, exportAuditStream } from 'api/security-audit';
 import { defaultHandlers, registerHandlers } from './worker.js';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -20,10 +21,17 @@ const { db, sql } = createDb(databaseUrl);
 const runtime = createDynamicRuntime(process.env, { db });
 // DB outbox survives process restarts; failed stops remain due for retry.
 const drainingSecurity = { urgent: false, normal: false };
+// Object Lock の保管先は未承認（保管サービス・保持期間・IAM）。承認後にここで AuditStorage を注入するまで配送は無効で、
+// deliver_audit は outbox に残り、DB 側の遮断・監査連鎖は通常どおり動く。
+const auditStorage = disabledAuditStorage;
+const auditRetentionDays = Number(process.env.AUDIT_RETENTION_DAYS ?? 0);
+const auditDeps = { storage: auditStorage, retentionMs: auditRetentionDays * 86_400_000 };
+const auditHandlers = auditStorage.installed && auditRetentionDays > 0 ? auditDeliveryHandlers(db, auditDeps) : {};
+if (!auditStorage.installed || auditRetentionDays <= 0) console.warn('worker: audit WORM delivery NOT INSTALLED (no Object Lock storage / retention approved); audit rows stay in the DB chain only');
 const securityTick = async (queue: 'urgent' | 'normal') => {
   if (drainingSecurity[queue]) return;
   drainingSecurity[queue] = true;
-  try { await drainSecurityOutbox(db, { ...(runtime ? stopAppHandlers(runtime.driver, runtime.lock) : {}), ...notifications }, { queue }); }
+  try { await drainSecurityOutbox(db, { ...(runtime ? stopAppHandlers(runtime.driver, runtime.lock) : {}), ...notifications, ...auditHandlers }, { queue }); }
   catch (e) { console.error('worker: security outbox failed', e); }
   finally { drainingSecurity[queue] = false; }
 };
@@ -33,6 +41,10 @@ const emailKey = process.env.EMAIL_ENC_KEY ? Buffer.from(process.env.EMAIL_ENC_K
 const mailer = process.env.SMTP_URL ? createMailer(process.env.SMTP_URL, process.env.MAIL_FROM || 'no-reply@localhost') : undefined;
 const notifications = mailer && emailKey && process.env.APP_ORIGIN && process.env.ADMIN_ORIGIN ? notificationHandlers(db, { mailer, emailKey, appOrigin: process.env.APP_ORIGIN, adminOrigin: process.env.ADMIN_ORIGIN }) : {};
 // Separate runners reserve capacity for traps even while normal SMTP delivery is waiting.
+if (auditStorage.installed && auditRetentionDays > 0) {
+  // 管理監査の連続範囲は outbox を持たないので定期的に輸出する（二重 worker は advisory lock で直列化）。
+  setInterval(() => { void exportAuditStream(db, 'admin', auditDeps).catch((e: unknown) => console.error('worker: admin audit export failed', e)); }, 60_000).unref();
+}
 const securityTimer = setInterval(() => { void securityTick('normal'); }, 1000);
 const urgentSecurityTimer = setInterval(() => { void securityTick('urgent'); }, 1000);
 securityTimer.unref();

@@ -10,6 +10,8 @@ export interface UploadServerOptions {
   /** 運営者の公開鍵（base64）。ページに埋め込まれるのは公開鍵だけ。 */
   recipientPublicKeyB64: string;
   ingest(input: IngestInput): Promise<IngestResult>;
+  /** 接続元の VPN / proxy / Tor 判定（フェーズ 6）。拒否なら本文を読む前に返す（token も blob も作らない）。省略時は判定しない。 */
+  networkGuard?(req: IncomingMessage): Promise<{ status: 403 | 503; error: string } | null>;
 }
 
 /**
@@ -44,6 +46,8 @@ export function createUploadServer(opts: UploadServerOptions): Server {
       const path = url.pathname;
       if (path === '/ingest/id-upload') {
         if (req.method !== 'POST') return json(res, 405, { error: 'method_not_allowed' });
+        const denied = opts.networkGuard ? await opts.networkGuard(req).catch(() => ({ status: 503 as const, error: 'network_unavailable' })) : null;
+        if (denied) { req.resume(); return json(res, denied.status, { error: denied.error }); }
         const body = await readBody(req);
         if (body === 'too_large') {
           return json(res, 413, { error: 'too_large' });
