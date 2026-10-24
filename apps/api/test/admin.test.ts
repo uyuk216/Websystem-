@@ -259,6 +259,18 @@ describe('audit log (Review Focus 5)', () => {
     await expect(withAccount(db, a.a.id, (tx) => tx.insert(platformSettings).values({ key: 'z', value: 1, updatedBy: a.a.id }))).rejects.toThrow();
   }));
 
+  it('security.* settings: known keys only, audited before/after, unsafe values refused', () => withTestDb(async (db) => {
+    const owner = await mkOperator(db, 'owner14@x.y', 'owner');
+    const { call } = build(db);
+    const co = `asid=${await login(call, owner)}`;
+    const put = (k: string, value: unknown) => call(`/admin/settings/${k}`, { method: 'PUT', login: owner.login, cookie: co, body: { value } });
+    expect((await put('security.min_samples', 5)).status).toBe(200);
+    expect((await put('security.min_samples', 6)).status).toBe(200);
+    for (const [k, v] of [['security.unknown', 1], ['security.min_samples', -1], ['security.min_samples', 0], ['security.outbox.capacity', 1e15], ['security.detector.falco.mode', 'always'], ['security.network.exceptions', ['0.0.0.0/0']]] as const) expect((await put(k, v)).status).toBe(400);
+    const changed = (await db.select().from(adminAuditLog).where(eq(adminAuditLog.action, 'settings.changed')).orderBy(adminAuditLog.seq)).map((r) => r.detail);
+    expect(changed).toEqual([{ before: null, after: 5 }, { before: 5, after: 6 }]);
+  }));
+
   it('settings changes keep the before and after values; reviewers cannot change settings', () => withTestDb(async (db) => {
     const owner = await mkOperator(db, 'owner13@x.y', 'owner');
     const rev = await mkOperator(db, 'rev13@x.y', 'reviewer');

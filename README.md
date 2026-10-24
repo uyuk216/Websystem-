@@ -12,6 +12,7 @@
 ## ドキュメント
 
 - 開発環境のセットアップ: [docs/dev-setup.md](docs/dev-setup.md)
+- フェーズ 6 防御の運用手順（承認が必要なもの一覧を含む）: [docs/security/phase6-operations.md](docs/security/phase6-operations.md)
 - 設計書: [docs/superpowers/specs/2026-10-15-platform-design.md](docs/superpowers/specs/2026-10-15-platform-design.md)
 - フェーズ 1 計画: [docs/superpowers/plans/2026-10-15-phase1-foundation.md](docs/superpowers/plans/2026-10-15-phase1-foundation.md)
 
@@ -63,3 +64,10 @@ pnpm --filter api exec node --env-file-if-exists=../../.env.development --import
 `ExternalCommandDecryptor` を使う場合は、端末側の連携処理で封筒の復号を担当させ、
 管理画面の `DecryptViewer` にその `Decryptor` を渡します。現在の画面の鍵ファイル選択は
 `LocalKeyDecryptor` 用で、ブラウザから外部コマンドを直接実行する機能はありません。
+
+### Phase 6: 防御
+
+検知・遮断・通知・監査の部品はコードとしてそろっていますが、Falco、プロキシ、IP データ、DB 監査、
+外部 URL 検査、Object Lock はまだ導入していません。導入には一つずつ承認が必要です
+（[運用手順](docs/security/phase6-operations.md)）。`pnpm --filter api security:status` と
+`scripts/doctor.sh` が未導入の部品を表示し、すべて導入して enforce にするまでは「本番防御完了」と表示しません。

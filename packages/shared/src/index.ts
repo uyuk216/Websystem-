@@ -28,3 +28,7 @@ export {
   severityRank, maxSeverity, planFor, validateSignalShape, canonicalEvidence,
 } from './security.js';
 export type { SignalSource, Severity, TargetKind, SecurityTarget, SecuritySignal, Plan as SecurityPlan, SignalError } from './security.js';
+export {
+  DETECTOR_MODES, SECURITY_PARTS, SECURITY_SETTING_SPECS, APPROVAL_LIST, isSecuritySettingKey, validateSecuritySetting, resolveSecuritySettings, assessProductionDefense,
+} from './security-ops.js';
+export type { DetectorMode, SecurityPart, SettingCheck, PartState, PartReport, PartInput, ApprovalKind, ApprovalItem, SecuritySettingSpec } from './security-ops.js';

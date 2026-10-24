@@ -36,6 +36,8 @@ export interface AdminDeps {
   /** Cookie `Secure` flag; false only for plain-http local development. */
   secureCookie?: boolean;
   handlers?: DangerousHandlers;
+  /** 本番扱い（省略時は NODE_ENV）。security.* の緩すぎる値の拒否に使う。 */
+  production?: boolean;
 }
 
 declare module 'hono' {

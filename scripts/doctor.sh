@@ -64,3 +64,7 @@ echo "doctor: すべて揃っています"
 echo '[NOT INSTALLED] Phase 6 Falco/Linux driver: disabled; no collector/runtime visibility verified'
 echo '[NOT INSTALLED] Phase 6 runtime metrics and mandatory egress proxy: disabled; bypass prevention unverified'
 echo '[NOT INSTALLED] Phase 6 Safe Browsing and durable distribution collector: no external URL inspection; new publication held'
+echo '[NOT INSTALLED] Phase 6 IP anonymity data (VPN/proxy/Tor): no data; protected actions return 503 in enforce, nothing is blocked in observe'
+echo '[NOT INSTALLED] Phase 6 honeytoken values and DB audit extension: decoys not configured; no decoy reads are observed'
+echo '[NOT INSTALLED] Phase 6 Object Lock audit storage: audit rows stay only in the DB chain; delivery and tamper checks are unproven'
+echo '[INCOMPLETE] Phase 6 production defense: every part above must be installed and in enforce mode (see docs/security/phase6-operations.md; run: pnpm --filter api security:status)'
