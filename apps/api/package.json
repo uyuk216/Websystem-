@@ -30,7 +30,8 @@
     "./security-ip": "./src/security/ip.ts",
     "./security-client-ip": "./src/security/client-ip.ts",
     "./security-config": "./src/security/config.ts",
-    "./security-gate-server": "./src/security/internal-server.ts"
+    "./security-gate-server": "./src/security/internal-server.ts",
+    "./security-notifications": "./src/security/notifications.ts"
   },
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/server.ts",

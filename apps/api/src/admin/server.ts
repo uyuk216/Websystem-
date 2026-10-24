@@ -1,8 +1,9 @@
 import type { RuntimeDriver } from 'platform';
 import type { ReviewDeps } from '../verification/review.js';
+import { registerSecurity } from './security.js';
 import { registerReviews } from './reviews.js';
 import { registerGrants } from './grants.js';
-import { registerAccounts } from './accounts.js';
+import { refreshAccountOwners, registerAccounts } from './accounts.js';
 import { transitionUsageState } from '../usage/state.js';
 import { owners } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
@@ -49,9 +50,18 @@ export const defaultDangerousHandlers: DangerousHandlers = {
   unfreeze_account: async (tx, target) => {
     if (!UUID.test(target)) throw new Error('invalid owner');
     await tx.execute(sql`reset role`);
-    const [owner] = await tx.select({ id: owners.id }).from(owners).where(eq(owners.id, target));
+    const [owner] = await tx.select({ id: owners.id, accountId: owners.accountId }).from(owners).where(eq(owners.id, target));
     if (!owner) throw new Error('owner not found');
     await transitionUsageState(tx as unknown as Db, target, 'manual_unfreeze');
+  },
+  unfreeze_security_account: async (tx, target) => {
+    if (!UUID.test(target)) throw new Error('invalid owner');
+    await tx.execute(sql`reset role`);
+    const [owner] = await tx.select({ id: owners.id, accountId: owners.accountId }).from(owners).where(eq(owners.id, target));
+    if (!owner) throw new Error('owner not found');
+    if (owner.accountId) await refreshAccountOwners(tx as unknown as Db, owner.accountId, 'security_unfreeze', {});
+    else await transitionUsageState(tx as unknown as Db, target, 'security_unfreeze');
+    await tx.execute(sql`select pg_notify('security_block', '')`);
   },
 };
 
@@ -167,6 +177,7 @@ export function createAdminApp(deps: AdminDeps): Hono {
     return (await cancelDangerous(db, deps.mailer, deps.emailEncKey, c.get('operator'), id)) ? c.json({ ok: true }) : c.json({ error: 'not_found' }, 404);
   });
 
+  registerSecurity(app, deps, ownerOnly);
   registerReviews(app, deps);
   registerGrants(app, deps, ownerOnly);
   registerAccounts(app, deps, ownerOnly);

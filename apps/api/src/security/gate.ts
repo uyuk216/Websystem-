@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { t, type Locale } from 'i18n';
 import { withSystem, type Db, type Tx } from '../db/client.js';
-import { apps, owners, securityBlocks } from '../db/schema.js';
+import { securityBlocks } from '../db/schema.js';
 import { hashIp } from './ip.js';
 
 export type GateScope = 'app' | 'account' | 'ip';
@@ -24,11 +24,14 @@ export async function securityGate(db: Db | Tx, input: GateInput): Promise<GateV
   const ipHash = input.clientIp ? hashIp(input.clientIp, input.hashKey) : null;
   if (!input.appId && !input.accountId && !ipHash) return { allow: true };
   return withSystem(db, async (tx) => {
+    const account = input.accountId ? sql`${input.accountId}::uuid` : input.appId ? sql`(SELECT coalesce(o.account_id, (SELECT m.account_id FROM team_members m WHERE m.team_id = o.team_id AND m.role = 'owner' LIMIT 1)) FROM apps a JOIN owners o ON o.id = a.owner_id WHERE a.id = ${input.appId}::uuid)` : sql`NULL::uuid`;
+    const frozen = await tx.execute(sql`SELECT 1 FROM usage_states u JOIN owners o ON o.id = u.owner_id WHERE u.reasons @> ARRAY['security_freeze']::text[] AND (o.account_id = ${account} OR o.id = (SELECT owner_id FROM apps WHERE id = ${input.appId ?? null}::uuid)) LIMIT 1`);
+    if (frozen.length) return { allow: false as const, scope: 'account' as const, reasonCode: 'security_freeze' };
     const conds = [
       input.appId ? and(eq(securityBlocks.targetKind, 'app'), eq(securityBlocks.appId, input.appId)) : undefined,
       input.accountId ? and(eq(securityBlocks.targetKind, 'account'), eq(securityBlocks.accountId, input.accountId)) : undefined,
       input.appId && !input.accountId
-        ? and(eq(securityBlocks.targetKind, 'account'), eq(securityBlocks.accountId, sql`(SELECT o.account_id FROM ${apps} a JOIN ${owners} o ON o.id = a.owner_id WHERE a.id = ${input.appId})`))
+        ? and(eq(securityBlocks.targetKind, 'account'), eq(securityBlocks.accountId, account))
         : undefined,
       ipHash ? and(eq(securityBlocks.targetKind, 'ip'), eq(securityBlocks.ipHash, ipHash)) : undefined,
     ].filter((c) => c !== undefined);
@@ -48,10 +51,15 @@ export async function blockedAppIds(db: Db | Tx, appIds: readonly string[]): Pro
   if (appIds.length === 0) return new Set();
   return withSystem(db, async (tx) => {
     const rows = await tx.execute<{ id: string }>(sql`
-      SELECT a.id FROM apps a LEFT JOIN owners o ON o.id = a.owner_id
-      WHERE a.id IN (${sql.join(appIds.map((i) => sql`${i}::uuid`), sql`, `)}) AND EXISTS (
-        SELECT 1 FROM security_blocks b WHERE b.released_at IS NULL AND (
-          (b.target_kind = 'app' AND b.app_id = a.id) OR (b.target_kind = 'account' AND o.account_id IS NOT NULL AND b.account_id = o.account_id)))`);
+      SELECT a.id FROM apps a JOIN owners o ON o.id = a.owner_id
+      LEFT JOIN team_members m ON m.team_id = o.team_id AND m.role = 'owner'
+      WHERE a.id IN (${sql.join(appIds.map((id) => sql`${id}::uuid`), sql`, `)}) AND (
+        EXISTS (SELECT 1 FROM security_blocks b WHERE b.released_at IS NULL AND (
+          (b.target_kind = 'app' AND b.app_id = a.id) OR
+          (b.target_kind = 'account' AND b.account_id = coalesce(o.account_id, m.account_id))))
+        OR EXISTS (SELECT 1 FROM usage_states u JOIN owners frozen ON frozen.id = u.owner_id
+          WHERE u.reasons @> ARRAY['security_freeze']::text[]
+          AND (u.owner_id = a.owner_id OR frozen.account_id = coalesce(o.account_id, m.account_id))))`);
     return new Set(rows.map((r) => r.id));
   });
 }

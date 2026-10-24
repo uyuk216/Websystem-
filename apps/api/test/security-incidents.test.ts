@@ -52,7 +52,7 @@ describe('handleSecuritySignal: 重大度ごとの対処', () => {
     expect(r).toMatchObject({ duplicate: false, escalated: false, severity: 'high', blockCreated: true });
     expect(await activeBlocks(db, { appId: id })).toHaveLength(1);
     const kinds = (await db.select().from(securityOutbox)).map((o) => o.kind).sort();
-    expect(kinds).toEqual(['deliver_audit', 'deliver_audit', 'notify_operator', 'stop_app']);
+    expect(kinds).toEqual(['deliver_audit', 'deliver_audit', 'notify_operator', 'notify_owner', 'stop_app']);
     expect(await verifySecurityAudit(db)).toBeNull();
   }));
 
@@ -159,13 +159,13 @@ describe('handleSecuritySignal: 重複・昇格・同時実行', () => {
     expect(await verifySecurityAudit(db)).toBeNull();
   }));
 
-  it('同じ理由のブロックは重複せず、別の理由は別の行（解除は理由ごとにできる）', () => withTestDb(async (db) => {
+  it('別事件なら同じ理由でも独立した行（事件解除が他事件を消さない）', () => withTestDb(async (db) => {
     const a = await acct(db); const id = await app(db, a.ownerId); const target = { kind: 'app', appId: id } as const;
     await handleSecuritySignal(db, sig(target, 'medium'));
     await handleSecuritySignal(db, sig(target, 'high'));
-    expect(await activeBlocks(db, { appId: id })).toHaveLength(1);
+    expect(await activeBlocks(db, { appId: id })).toHaveLength(2);
     await handleSecuritySignal(db, sig(target, 'medium', { reasonCode: 'cpu.spike' }));
-    expect((await activeBlocks(db, { appId: id })).map((b) => b.reasonCode).sort()).toEqual(['cpu.spike', 'falco.shell']);
+    expect((await activeBlocks(db, { appId: id })).map((b) => b.reasonCode).sort()).toEqual(['cpu.spike', 'falco.shell', 'falco.shell']);
   }));
 
   it('別接続からの同時の昇格・重複でも、事件 1 件・ブロック 1 件・停止 1 件に収まる', () => withTestDb(async (db) => {

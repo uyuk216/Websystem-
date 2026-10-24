@@ -22,7 +22,6 @@ async function site(db: TestDb, a: { id: string; ownerId: string }, name = 'my-s
 }
 const rowOf = async (db: TestDb, appId: string, month: string) =>
   (await db.select().from(transferUsage).where(and(eq(transferUsage.appId, appId), eq(transferUsage.month, month))))[0];
-const settle = () => new Promise((r) => setTimeout(r, 20));
 
 describe('month helpers', () => {
   it('uses the UTC month', () => {
@@ -81,11 +80,11 @@ describe('transfer meter', () => {
     const { meter, mailer, clock } = setup(db);
     meter.record(id, 700);
     await meter.flush();
-    await settle();
+    await meter.stop();
     expect(mailer.sentTo('owner@example.com')).toBe(0);
     meter.record(id, 100);
     await meter.flush();
-    await settle();
+    await meter.stop();
     expect(mailer.sentTo('owner@example.com')).toBe(1);
     expect(mailer.lastBodyTo('owner@example.com')).toContain('80%');
     expect(mailer.lastBodyTo('owner@example.com')).toContain('サイト');
@@ -93,12 +92,12 @@ describe('transfer meter', () => {
     expect((await rowOf(db, id, '2026-10'))?.notified80).toBe(true);
     meter.record(id, 100);
     await meter.flush();
-    await settle();
+    await meter.stop();
     expect(mailer.sentTo('owner@example.com')).toBe(1);
     clock.t = new Date('2026-11-02T00:00:00Z');
     meter.record(id, 900);
     await meter.flush();
-    await settle();
+    await meter.stop();
     expect(mailer.sentTo('owner@example.com')).toBe(2);
   }));
 
@@ -110,7 +109,7 @@ describe('transfer meter', () => {
     m1.meter.record(id, 850);
     meter2.record(id, 10);
     await Promise.all([m1.meter.flush(), meter2.flush()]);
-    await settle();
+    await Promise.all([m1.meter.stop(), meter2.stop()]);
     expect(m1.mailer.sentTo('owner@example.com')).toBe(1);
   }));
 
@@ -121,7 +120,7 @@ describe('transfer meter', () => {
     const { meter, mailer } = setup(db);
     meter.record(id, 900);
     await meter.flush();
-    await settle();
+    await meter.stop();
     expect(mailer.sentTo('teamowner@example.com')).toBe(1);
     expect(mailer.lastBodyTo('teamowner@example.com')).toContain('monthly transfer limit');
   }));

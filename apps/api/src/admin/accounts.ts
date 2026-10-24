@@ -10,7 +10,7 @@ import { auditedSystem } from './operations.js';
 import { jsonBody, validId } from './validation.js';
 
 /** Personal and team owners inherit account grants; update both immediately. */
-export async function refreshAccountOwners(db: Db, accountId: string, event: UsageEvent, deps: AdminDeps): Promise<void> {
+export async function refreshAccountOwners(db: Db, accountId: string, event: UsageEvent, deps: Pick<AdminDeps, 'driver'>): Promise<void> {
   const teams = db.select({ id: teamMembers.teamId }).from(teamMembers).where(and(eq(teamMembers.accountId, accountId), eq(teamMembers.role, 'owner')));
   const rows = await db.select({ id: owners.id }).from(owners).where(or(eq(owners.accountId, accountId), inArray(owners.teamId, teams)));
   for (const row of rows) await transitionUsageState(db, row.id, event, { driver: deps.driver });

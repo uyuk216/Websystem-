@@ -9,6 +9,7 @@ import { startScheduledBackups } from 'api/database-backups';
 import { createMailer } from 'api/mailer';
 import { reconcileEventBoosts } from 'api/event-boost';
 import { drainSecurityOutbox, stopAppHandlers } from 'api/security-actions';
+import { notificationHandlers } from 'api/security-notifications';
 import { defaultHandlers, registerHandlers } from './worker.js';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -18,23 +19,28 @@ if (!databaseUrl) throw new Error('Missing required env var: DATABASE_URL');
 const { db, sql } = createDb(databaseUrl);
 const runtime = createDynamicRuntime(process.env, { db });
 // DB outbox survives process restarts; failed stops remain due for retry.
-let drainingSecurity = false;
-const securityTick = async () => {
-  if (!runtime || drainingSecurity) return;
-  drainingSecurity = true;
-  try { await drainSecurityOutbox(db, stopAppHandlers(runtime.driver, runtime.lock)); }
+const drainingSecurity = { urgent: false, normal: false };
+const securityTick = async (queue: 'urgent' | 'normal') => {
+  if (drainingSecurity[queue]) return;
+  drainingSecurity[queue] = true;
+  try { await drainSecurityOutbox(db, { ...(runtime ? stopAppHandlers(runtime.driver, runtime.lock) : {}), ...notifications }, { queue }); }
   catch (e) { console.error('worker: security outbox failed', e); }
-  finally { drainingSecurity = false; }
+  finally { drainingSecurity[queue] = false; }
 };
 const locker = runtime ? createWakeLocker(databaseUrl, 4) : undefined;
 if (runtime && locker) runtime.lock = locker.lock;
-await securityTick();
-const securityTimer = setInterval(() => { void securityTick(); }, 1000);
-securityTimer.unref();
-const storage = createStorage(loadStorageConfig(process.env));
-await storage.ensureBuckets();
 const emailKey = process.env.EMAIL_ENC_KEY ? Buffer.from(process.env.EMAIL_ENC_KEY, 'base64') : undefined;
 const mailer = process.env.SMTP_URL ? createMailer(process.env.SMTP_URL, process.env.MAIL_FROM || 'no-reply@localhost') : undefined;
+const notifications = mailer && emailKey && process.env.APP_ORIGIN && process.env.ADMIN_ORIGIN ? notificationHandlers(db, { mailer, emailKey, appOrigin: process.env.APP_ORIGIN, adminOrigin: process.env.ADMIN_ORIGIN }) : {};
+// Separate runners reserve capacity for traps even while normal SMTP delivery is waiting.
+const securityTimer = setInterval(() => { void securityTick('normal'); }, 1000);
+const urgentSecurityTimer = setInterval(() => { void securityTick('urgent'); }, 1000);
+securityTimer.unref();
+urgentSecurityTimer.unref();
+void securityTick('urgent');
+void securityTick('normal');
+const storage = createStorage(loadStorageConfig(process.env));
+await storage.ensureBuckets();
 // 学生証の暗号文を消す接続（pii_admin）。ワーカーだけが持つ（apps/api は持たない）。無ければ掃除ジョブは何もしない。
 const piiUrl = process.env.PII_ADMIN_DATABASE_URL;
 const piiSql = piiUrl ? createPiiPool(piiUrl, { max: 2 }) : undefined;
@@ -84,6 +90,7 @@ console.log('worker: waiting for jobs');
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
     clearInterval(securityTimer);
+    clearInterval(urgentSecurityTimer);
     void boss.stop({ graceful: true }).finally(() => {
       void locker?.close();
       storage.close();

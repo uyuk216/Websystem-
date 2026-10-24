@@ -533,7 +533,7 @@ export const securityBlocks = pgTable('security_blocks', {
   releasedBy: uuid('released_by').references(() => operators.accountId),
   releaseNote: text('release_note'),
 }, (t) => [
-  uniqueIndex('security_blocks_active_idx').on(t.targetKind, sql`coalesce(${t.appId}::text, ${t.accountId}::text, ${t.ipHash})`, t.reasonCode).where(sql`${t.releasedAt} IS NULL`),
+  uniqueIndex('security_blocks_active_idx').on(t.incidentId, t.reasonCode).where(sql`${t.releasedAt} IS NULL`),
   index('security_blocks_app_idx').on(t.appId).where(sql`${t.releasedAt} IS NULL`),
   index('security_blocks_ip_idx').on(t.ipHash).where(sql`${t.releasedAt} IS NULL`),
   check('security_blocks_target_check', sql`(
@@ -547,6 +547,7 @@ export const securityBlocks = pgTable('security_blocks', {
 export const securityOutbox = pgTable('security_outbox', {
   id: id(),
   incidentId: uuid('incident_id').notNull().references(() => securityIncidents.id, { onDelete: 'cascade' }),
+  priority: integer('priority').notNull().default(0),
   kind: text('kind', { enum: ['stop_app', 'notify_operator', 'notify_owner', 'deliver_audit'] }).notNull(),
   /** 副作用の一意キー。同じ副作用を二重に積まない。 */
   effectKey: text('effect_key').notNull().unique(),
@@ -570,4 +571,18 @@ export const securityAudit = pgTable('security_audit', {
   createdAt: createdAt(),
   prevHash: text('prev_hash').notNull().default(''),
   hash: text('hash').notNull().default(''),
+});
+
+/** Private recovery records; accessed only through authenticated security services. */
+export const securityAppeals = pgTable('security_appeals', {
+  id: id(), incidentId: uuid('incident_id').notNull().references(() => securityIncidents.id),
+  accountId: uuid('account_id').notNull().references(() => accounts.id),
+  message: text('message').notNull(), createdAt: createdAt(),
+});
+export const securityNotifications = pgTable('security_notifications', {
+  id: id(), accountId: uuid('account_id').notNull().references(() => accounts.id),
+  incidentId: uuid('incident_id').notNull().references(() => securityIncidents.id),
+  effectKey: text('effect_key').notNull().unique(), audience: text('audience').notNull(),
+  subject: text('subject').notNull(), body: text('body').notNull(),
+  mailedAt: timestamp('mailed_at', { withTimezone: true }), createdAt: createdAt(),
 });

@@ -1,3 +1,5 @@
+import { userIncidents, submitAppeal } from '../security/appeals.js';
+import { userNotifications } from '../security/notifications.js';
 import { trustedClientIp } from '../security/client-ip.js';
 import { securityGate } from '../security/gate.js';
 import { planGuidance } from '../usage/plan-guidance.js';
@@ -114,7 +116,7 @@ export function createApp(deps?: AppDeps): Hono {
     const { hashKey } = deps.security;
     // 判定できないときは 503（根拠のない恒久ブロックはしない）。許可は毎回引き直す。
     app.use('*', async (c, next) => {
-      if (c.req.path === '/healthz') return next();
+      if (c.req.path === '/healthz' || (c.req.method === 'GET' && ['/security/incidents', '/security/notifications'].includes(c.req.path)) || (c.req.method === 'POST' && (['/auth/logout', '/security/session/start', '/security/session/verify'].includes(c.req.path) || /^\/security\/incidents\/[0-9a-f-]{36}\/appeals$/i.test(c.req.path)))) return next();
       try {
         const v = await securityGate(deps.db, { clientIp: clientIp(c), hashKey });
         if (!v.allow) return c.json({ error: 'security_blocked' }, 403);
@@ -236,6 +238,41 @@ export function createApp(deps?: AppDeps): Hono {
     const session = requireSession(deps.db, { clientIp, accountBlocked });
     // Credential management and account-security routes: session cookie only, never an API token.
     const cookieSession = requireSession(deps.db, { bearer: false, accountBlocked });
+    // Dedicated code-only identity proof: no registration, recovery reset, API token or app mutation.
+    app.post('/security/session/start', bodyLimit({ maxSize: 4096 }), rateLimit(clientIp, 5, 3600), async (c) => {
+      const b = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+      if (!str(b?.email, 320)) return c.json({ error: 'invalid' }, 400);
+      const result = await startEmailChallenge(deps.db, deps.mailer, { email: b.email, purpose: 'login', locale: asLocale(b.locale), requesterDeviceId: c.get('deviceId') }, deps.config);
+      return 'error' in result ? c.json(result, 429) : c.json(result);
+    });
+    app.post('/security/session/verify', bodyLimit({ maxSize: 4096 }), rateLimit(clientIp, 20, 600), async (c) => {
+      const b = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+      if (!str(b?.challengeId, 64) || !UUID.test(b.challengeId) || !str(b.code, 6)) return c.json({ error: 'invalid' }, 400);
+      const result = await verifyEmailCode(deps.db, b.challengeId, b.code, c.get('deviceId'));
+      if ('error' in result) return c.json(result, result.error === 'locked' ? 429 : 400);
+      const session = await createSession(deps.db, result.accountId, deviceLabel(c));
+      setSessionCookie(c, session.token);
+      await logLogin(c, result.accountId, 'email');
+      return c.json({ ok: true });
+    });
+    const recoverySession = requireSession(deps.db, { bearer: false });
+    app.get('/security/incidents', recoverySession, rateLimit((c) => c.get('accountId'), 60, 600), async (c) => {
+      c.header('Cache-Control', 'no-store');
+      return c.json({ incidents: await userIncidents(deps.db, c.get('accountId'), asLocale(c.req.query('locale'))) });
+    });
+    app.get('/security/notifications', recoverySession, rateLimit((c) => c.get('accountId'), 60, 600), async (c) => {
+      c.header('Cache-Control', 'no-store');
+      return c.json({ notifications: await userNotifications(deps.db, c.get('accountId')) });
+    });
+    app.post('/security/incidents/:id/appeals', recoverySession, bodyLimit({ maxSize: 16_384 }), rateLimit((c) => c.get('accountId'), 10, 3600), async (c) => {
+      const id = c.req.param('id');
+      if (!UUID.test(id)) return c.json({ error: 'invalid' }, 400);
+      const origin = c.req.header('origin');
+      if ((origin && origin !== deps.config.appOrigin) || c.req.header('sec-fetch-site') === 'cross-site') return c.json({ error: 'forbidden' }, 403);
+      const body = await c.req.json().catch(() => null) as { message?: unknown } | null;
+      const result = await submitAppeal(deps.db, c.get('accountId'), id, body?.message);
+      return result === 'ok' ? c.json({ ok: true }) : c.json({ error: result }, result === 'rate_limited' ? 429 : result === 'not_found' ? 404 : 400);
+    });
     app.post('/auth/passkey/register/start', cookieSession, async (c) => c.json(await startPasskeyRegistration(deps.db, c.get('accountId'), deps.config)));
     app.post('/auth/passkey/register/finish', cookieSession, attemptLimit, async (c) => {
       const b = await c.req.json().catch(() => null) as Record<string, unknown> | null;
@@ -571,7 +608,7 @@ export function createApp(deps?: AppDeps): Hono {
         return 'error' in r ? c.json({ error: r.error }, appStatus[r.error]) : c.json(r);
       });
     }
-    app.post('/auth/logout', cookieSession, async (c) => {
+    app.post('/auth/logout', recoverySession, rateLimit((c) => c.get('accountId'), 30, 600), async (c) => {
       await revokeSession(deps.db, c.get('accountId'), c.get('sessionId'));
       clearSessionCookie(c);
       return c.json({ ok: true });

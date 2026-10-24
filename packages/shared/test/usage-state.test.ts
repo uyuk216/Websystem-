@@ -33,6 +33,8 @@ describe('applyUsageEvent: 全イベント x 全理由の組み合わせ表', ()
     return out;
   };
   const MANUAL: Partial<Record<UsageEvent, [UsageReason, 'add' | 'remove']>> = {
+    security_block: ['security_block', 'add'], security_unblock: ['security_block', 'remove'],
+    security_freeze: ['security_freeze', 'add'], security_unfreeze: ['security_freeze', 'remove'],
     manual_suspend: ['manual_suspend', 'add'], manual_resume: ['manual_suspend', 'remove'],
     manual_block: ['manual_block', 'add'], manual_unblock: ['manual_block', 'remove'],
     manual_freeze: ['manual_freeze', 'add'], manual_unfreeze: ['manual_freeze', 'remove'],
@@ -114,5 +116,19 @@ describe('timeReasonFor / nextEvaluationAt', () => {
     expect(reregistrationFiscalKey(jst('2027-03-01T00:00:00'))).toBe('FY2026');
     expect(reregistrationFiscalKey(jst('2027-02-28T23:59:59'))).toBeNull();
     expect(reregistrationFiscalKey(jst('2027-04-01T00:00:00'))).toBeNull();
+  });
+});
+
+describe('security reasons stay independent from manual and time reasons', () => {
+  it('only removes its own block/freeze reasons', () => {
+    const initial = { reasons: R('manual_block', 'manual_freeze', 'manual_suspend', 'security_block', 'security_freeze', 'grant_revoked'), paid: false };
+    const released = applyUsageEvent(initial, 'security_unblock', null);
+    expect(released.reasons).toContain('manual_block');
+    expect(released.reasons).toContain('security_freeze');
+    const thawed = applyUsageEvent(released, 'security_unfreeze', null);
+    expect(thawed.reasons).toEqual(R('grant_revoked', 'manual_block', 'manual_freeze', 'manual_suspend'));
+    expect(stateOf(thawed.reasons)).toBe('frozen');
+    expect(applyUsageEvent(initial, 'manual_unfreeze', null).reasons).toContain('security_freeze');
+    expect(applyUsageEvent(initial, 'pro_started', null).reasons).toContain('security_block');
   });
 });

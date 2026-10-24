@@ -33,7 +33,7 @@ function card(value: unknown): HTMLElement {
 const rows = (data: Record<string, unknown>, key: string) => (data[key] ?? []) as Record<string, unknown>[];
 async function load(name: string): Promise<void> {
   clear(); screen.replaceChildren();
-  const h = document.createElement('h2'); h.textContent = (ADMIN_JA as Record<string, string>)[name] ?? ''; screen.append(h);
+  const h = document.createElement('h2'); h.textContent = (ADMIN_JA as Record<string, string>)[name] ?? (name === 'security' ? 'セキュリティ' : ''); screen.append(h);
   if (name === 'reviews') {
     for (const r of rows(await api('/reviews'), 'reviews')) {
       const a = card(r), id = String(r.verificationId);
@@ -88,6 +88,14 @@ async function load(name: string): Promise<void> {
       value.min = '0';
       button(a, '保存', async () => { if (!value.value) throw new Error('上限値を入力してください'); await api('/settings/' + key, { value: Number(value.value) }, 'PUT'); status.textContent = '保存しました'; }, owner);
     }
+  } else if (name === 'security') {
+    for (const r of rows(await api('/security'), 'incidents')) {
+      const a = card(r), reason = input(a, '操作理由');
+      button(a, '詳細・異議申し立て', async () => { const detail = await api(`/security/${r.id}`), view = card(detail); if (detail.unfreezeOwnerId) button(view, 'セキュリティ凍結解除を24時間後に予約', async () => { card(await api('/dangerous', { action: 'unfreeze_security_account', target: detail.unfreezeOwnerId })); }, owner); });
+      for (const [action, label] of [['release', '事件の理由を解除'], ['continue', '停止継続'], ['freeze', 'アカウント凍結']]) {
+        button(a, label!, async () => { await api(`/security/${r.id}/${action}`, { reason: reason.value }); await load(name); }, owner);
+      }
+    }
   } else if (name === 'audit') {
     button(screen, 'ハッシュ連鎖を検証', async () => { card(await api('/audit/verify')); });
     for (const r of rows(await api('/audit'), 'entries')) card(r);
@@ -127,6 +135,8 @@ async function init(): Promise<void> {
   const me = await api('/me'); owner = me.role === 'owner';
   el('ops').hidden = false; el('login').hidden = true; el('logout').hidden = false; status.textContent = 'ログイン済み（30分で期限切れ）';
   setTimeout(() => { clear(); el('ops').hidden = true; el('login').hidden = false; status.textContent = '再ログインしてください'; }, Math.max(0, new Date(String(me.expiresAt)).getTime() - Date.now()));
-  await load('reviews');
+  await load(location.hash.startsWith('#security/') ? 'security' : 'reviews');
+  const incidentId = /^#security\/([0-9a-f-]{36})$/i.exec(location.hash)?.[1];
+  if (incidentId) card(await api(`/security/${incidentId}`));
 }
 run(init);

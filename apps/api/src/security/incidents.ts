@@ -3,6 +3,7 @@ import { maxSeverity, planFor, severityRank } from 'shared';
 import type { SecuritySignal, Severity } from 'shared';
 import { withSystem, type Db, type Tx } from '../db/client.js';
 import { accounts, apps, securityAudit, securityBlocks, securityIncidents } from '../db/schema.js';
+import { reconcileAccountSecurity } from './reconcile.js';
 import { enqueueOutbox } from './outbox.js';
 import { assertValidSignal, SignalRejected } from './signals.js';
 
@@ -35,7 +36,7 @@ async function assertTrustedTarget(tx: Tx, t: SecuritySignal['target']): Promise
     const [a] = await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, t.appId)).for('update');
     if (!a || (t.ownerId !== undefined && t.ownerId !== a.ownerId)) throw new SignalRejected('untrusted_target');
   } else if (t.kind === 'account') {
-    const [a] = await tx.select({ id: accounts.id }).from(accounts).where(eq(accounts.id, t.accountId));
+    const [a] = await tx.select({ id: accounts.id }).from(accounts).where(eq(accounts.id, t.accountId)).for('update');
     if (!a) throw new SignalRejected('untrusted_target');
   }
 }
@@ -73,7 +74,7 @@ export async function handleSecuritySignal(db: Db, signal: SecuritySignal, opts:
         return { incidentId: existing.id, duplicate: true, escalated: false, severity: existing.severity, blockCreated: false };
       }
       const severity = maxSeverity(existing.severity, signal.severity);
-      [incident] = await tx.update(securityIncidents).set({ severity, updatedAt: now, ruleVersion: signal.ruleVersion, evidence: signal.evidence, evidenceDigest: signal.evidenceDigest }).where(eq(securityIncidents.id, existing.id)).returning();
+      [incident] = await tx.update(securityIncidents).set({ severity, status: 'open', updatedAt: now, ruleVersion: signal.ruleVersion, evidence: signal.evidence, evidenceDigest: signal.evidenceDigest }).where(eq(securityIncidents.id, existing.id)).returning();
       escalated = true;
     }
     if (!incident) throw new Error('security incident missing');
@@ -86,7 +87,7 @@ export async function handleSecuritySignal(db: Db, signal: SecuritySignal, opts:
 
     let blockCreated = false;
     if (plan.block) {
-      // 対象ごと・理由ごとに有効なブロックは 1 行（部分一意索引）。既にあれば足さない。
+      // 事件ごと・理由ごとに有効なブロックは 1 行（部分一意索引）。既にあれば足さない。
       const rows = await tx.insert(securityBlocks).values({
         incidentId: incident.id, targetKind: incident.targetKind, appId: incident.appId, accountId: incident.accountId,
         ipHash: incident.ipHash, reasonCode: incident.reasonCode, createdAt: now,
@@ -98,12 +99,14 @@ export async function handleSecuritySignal(db: Db, signal: SecuritySignal, opts:
         await tx.execute(sql`select pg_notify('security_block', '')`);
       }
     }
+    if (incident.accountId) await reconcileAccountSecurity(tx as unknown as Db, incident.accountId);
     if (plan.stopContainer && incident.appId) {
       await enqueueOutbox(tx, { incidentId: incident.id, kind: 'stop_app', effectKey: `stop_app:${incident.id}`, payload: { appId: incident.appId }, now });
     }
     if (plan.notifyOperator) {
-      await enqueueOutbox(tx, { incidentId: incident.id, kind: 'notify_operator', effectKey: `notify_operator:${incident.id}:${incident.severity}`, payload: { severity: incident.severity }, now });
+      await enqueueOutbox(tx, { incidentId: incident.id, kind: 'notify_operator', effectKey: `notify_operator:${incident.id}:${incident.severity}`, payload: { severity: incident.severity }, priority: incident.source === 'honeytoken' ? 100 : 0, now });
     }
+    if (incident.targetKind !== 'ip' && incident.severity !== 'low') await enqueueOutbox(tx, { incidentId: incident.id, kind: 'notify_owner', effectKey: `notify_owner:${incident.id}:${incident.severity}`, priority: incident.source === 'honeytoken' ? 100 : 0, now });
     return { incidentId: incident.id, duplicate: false, escalated, severity: incident.severity, blockCreated };
   });
 }

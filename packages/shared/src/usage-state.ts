@@ -10,12 +10,12 @@ export const USAGE_STATES = ['active', 'grace', 'suspended', 'blocked', 'frozen'
 export type UsageState = (typeof USAGE_STATES)[number];
 
 /** 理由。`grace` / `not_reregistered` / `grant_revoked` は時刻と付与から計算される（時間の理由）。`manual_*` は運営者の操作。 */
-export const USAGE_REASONS = ['grace', 'not_reregistered', 'grant_revoked', 'manual_block', 'manual_freeze', 'manual_suspend'] as const;
+export const USAGE_REASONS = ['grace', 'not_reregistered', 'grant_revoked', 'manual_block', 'manual_freeze', 'manual_suspend', 'security_block', 'security_freeze'] as const;
 export type UsageReason = (typeof USAGE_REASONS)[number];
 export const TIME_REASONS: readonly UsageReason[] = ['grace', 'not_reregistered', 'grant_revoked'];
 
 const REASON_STATE: Record<UsageReason, UsageState> = {
-  grace: 'grace', not_reregistered: 'suspended', grant_revoked: 'suspended', manual_block: 'blocked', manual_freeze: 'frozen', manual_suspend: 'suspended',
+  grace: 'grace', not_reregistered: 'suspended', grant_revoked: 'suspended', manual_block: 'blocked', manual_freeze: 'frozen', manual_suspend: 'suspended', security_block: 'blocked', security_freeze: 'frozen',
 };
 const PRIORITY: Record<UsageState, number> = { active: 0, grace: 1, suspended: 2, blocked: 3, frozen: 4 };
 
@@ -32,7 +32,8 @@ export const isStoppedState = (s: UsageState): boolean => s === 'suspended' || s
 export const USAGE_EVENTS = [
   'fiscal_year_rollover', 'month_start_reset', 'grant_expired', 'grant_revoked', 'reregistered',
   'manual_block', 'manual_unblock', 'manual_freeze', 'manual_unfreeze', 'manual_suspend', 'manual_resume',
-  /** フェーズ 7 の予約。いまは「有料になった」印を付けて時間の理由を外すだけ。 */
+  'security_block', 'security_unblock', 'security_freeze', 'security_unfreeze',
+  /** フェーズ 7 の予約。時間の理由だけを外す。 */
   'pro_started',
 ] as const;
 export type UsageEvent = (typeof USAGE_EVENTS)[number];
@@ -77,6 +78,10 @@ export function applyUsageEvent(prev: UsageSnapshot, event: UsageEvent, timeReas
   let paid = prev.paid;
   const dropTime = () => { for (const r of TIME_REASONS) reasons.delete(r); };
   switch (event) {
+    case 'security_block': reasons.add('security_block'); break;
+    case 'security_unblock': reasons.delete('security_block'); break;
+    case 'security_freeze': reasons.add('security_freeze'); break;
+    case 'security_unfreeze': reasons.delete('security_freeze'); break;
     case 'manual_suspend': reasons.add('manual_suspend'); break;
     case 'manual_resume': reasons.delete('manual_suspend'); break;
     case 'manual_block': reasons.add('manual_block'); break;
