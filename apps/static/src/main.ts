@@ -6,7 +6,12 @@ import { createTransferMeter } from 'api/transfer';
 import { buildRunSpec, createDynamicRuntime } from 'api/dynamic';
 import { createWakeLocker } from 'api/wake';
 import { createAccessLogger } from 'api/logs';
+import { loadSecurityKey } from 'api/security-config';
+import { createSecurityGateApp } from 'api/security-gate-server';
+import { isAppBlocked } from 'api/security-gate';
 import { createStaticApp } from './app.js';
+import { ConnectionRegistry } from './connections.js';
+import { resolveSite } from './site.js';
 
 const need = (n: string): string => {
   const v = process.env[n];
@@ -36,13 +41,28 @@ const dynamic = runtime && {
     withLock: locker?.lock,
     health: runtime.health,
     maxConcurrentWakes: 8,
+    // 遮断中のアプリは、起動のロックの中でも起動しない。
+    allowStart: async (appId: string) => !(await isAppBlocked(db, appId)),
   }),
   proto: process.env.EDGE_PROTO === 'http' ? ('http' as const) : ('https' as const),
 };
 
-const app = createStaticApp({ db, storage: storage.sites, meter, baseDomain, dynamic, accessLog, trustedProxyHops: Number(process.env.EDGE_TRUSTED_PROXY_HOPS || 0) });
+const trustedProxyHops = Number(process.env.EDGE_TRUSTED_PROXY_HOPS || 0);
+const securityKey = loadSecurityKey(process.env);
+const connections = new ConnectionRegistry();
+const stopRecheck = connections.start(db, 1000);
+// 遮断の commit 通知が来たら、すぐ再照合する（通知が欠けても、上の定期の再照合が拾う）。
+const listener = await sql.listen('security_block', () => { void connections.recheck(db); }).catch((e: unknown) => { console.error('security listen failed', e); return null; });
+
+const app = createStaticApp({ db, storage: storage.sites, meter, baseDomain, dynamic, accessLog, trustedProxyHops, security: { hashKey: securityKey, connections } });
 const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`static listening on :${info.port} (*.${baseDomain})`);
+});
+
+// Traefik の ForwardAuth が呼ぶ内部の判定口。localhost / 内部ネットワークの接続元だけを受ける。
+const gateApp = createSecurityGateApp({ db, hashKey: securityKey, trustedProxyHops, siteName: (host) => resolveSite(host, baseDomain) });
+const gateServer = serve({ fetch: gateApp.fetch, port: Number(process.env.SECURITY_GATE_PORT || 8091), hostname: process.env.SECURITY_GATE_BIND || '127.0.0.1' }, (info) => {
+  console.log(`security gate listening on :${info.port}`);
 });
 
 server.on('upgrade', (req, socket, head) => app.handleUpgrade(req, socket, head));
@@ -54,6 +74,9 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     const closed = new Promise<void>((resolve) => {
       // Idle keep-alive sockets are left to time out (5s) instead of being cut: a proxy reusing one at that moment
       // would fail the request. Anything still open after 10s is closed.
+      stopRecheck();
+      void listener?.unlisten();
+      gateServer.close();
       server.close(() => resolve());
       setTimeout(() => {
         if ('closeAllConnections' in server) server.closeAllConnections();

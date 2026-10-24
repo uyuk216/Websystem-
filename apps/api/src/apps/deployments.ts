@@ -8,6 +8,7 @@ import { UUID } from '../auth/cross-device.js';
 import { withAccount, withSystem, type Db, type Tx } from '../db/client.js';
 import { apps, deployments } from '../db/schema.js';
 import { mayManage } from './apps.js';
+import { isAppBlocked } from '../security/gate.js';
 import { runtimeBlockedUntil } from '../usage/runtime-hours.js';
 import { getRunInputs } from './databases.js';
 import { CONTAINER_PORT, type DynamicRuntime } from '../ingest/dynamic.js';
@@ -18,7 +19,7 @@ export interface JobQueue {
 }
 export type DeploySource = 'upload' | 'cli' | 'github';
 export type CreateDeploymentError = 'not_found' | 'forbidden' | 'too_large' | 'invalid';
-export type RollbackError = 'not_found' | 'forbidden' | 'invalid_state' | 'start_failed' | 'runtime_limit';
+export type RollbackError = 'not_found' | 'forbidden' | 'invalid_state' | 'start_failed' | 'runtime_limit' | 'security_blocked';
 
 export const DOWNLOAD_TIMEOUT_MS = 120_000;
 
@@ -195,6 +196,8 @@ export async function rollback(
     // Under the app's wake lock (like a rollout), so the sleeper and the edge never race the start.
     const startTarget = async (): Promise<{ error: RollbackError; reason?: string; logs?: string[] } | null> => {
       try {
+        // 遮断中のアプリは、ロールバックでも起動しない（ロックの中、起動の直前に確かめる）。
+        if (await isAppBlocked(db, appId)) return { error: 'security_blocked', reason: 'deploy.error.security_blocked' };
         const { env, networks, secrets } = await getRunInputs(db, rt, appId);
         await rt.driver.start({
           appId, deploymentId, ownerId: pre.ownerId, image: imageRef, env: { ...env, PORT: String(CONTAINER_PORT) },
@@ -218,7 +221,15 @@ export async function rollback(
     if (failed) return failed;
   }
 
-  const switched = await withAccount(db, accountId, async (tx) => {
+  // 公開の切り替えの直前にもう一度。起動の後に遮断された場合、起動した分は止めて切り替えない。
+  if (await isAppBlocked(db, appId)) {
+    if (started && !pre.wasLive && rt) await rt.driver.stopDeployment(appId, deploymentId).catch(() => undefined);
+    return { error: 'security_blocked', reason: 'deploy.error.security_blocked' };
+  }
+  const switched = await withSystem(db, async (systemTx) => {
+    await systemTx.select({ id: apps.id }).from(apps).where(eq(apps.id, appId)).for('update');
+    if (await isAppBlocked(systemTx, appId)) return { error: 'security_blocked' as const, reason: 'deploy.error.security_blocked' };
+    return withAccount(systemTx, accountId, async (tx) => {
     // Same lock as the worker's switch, so a rollback and a finishing deployment serialise.
     const [a] = await tx.select({ ownerId: apps.ownerId }).from(apps).where(eq(apps.id, appId)).for('update');
     if (!a) return { error: 'not_found' as const };
@@ -238,6 +249,7 @@ export async function rollback(
     await tx.update(deployments).set({ status: 'live' }).where(eq(deployments.id, d.id));
     await tx.update(apps).set({ activeDeploymentId: d.id, rolledBackAt: sql`now()`, lastAccessAt: sql`now()` }).where(eq(apps.id, appId));
     return { ok: true as const, stop: old.map((r) => r.id) };
+    });
   });
   if ('error' in switched) {
     if (started && !pre.wasLive && rt) await rt.driver.stopDeployment(appId, deploymentId).catch(() => undefined);
@@ -266,12 +278,17 @@ export async function restart(
   if (await runtimeBlockedUntil(db, pre.ownerId)) return { error: 'runtime_limit' };
   const run = async (): Promise<{ error: RollbackError; reason?: string; logs?: string[] } | null> => {
     try {
+      if (await isAppBlocked(db, appId)) return { error: 'security_blocked', reason: 'deploy.error.security_blocked' };
       const { env, networks, secrets } = await getRunInputs(db, rt, appId);
       await rt.driver.stopDeployment(appId, pre.deploymentId);
       await rt.driver.start({
         appId, deploymentId: pre.deploymentId, ownerId: pre.ownerId, image: pre.imageRef, env: { ...env, PORT: String(CONTAINER_PORT) },
         limits: await runLimitsFor(db, pre.ownerId, appId), port: CONTAINER_PORT, networks,
       });
+      if (await isAppBlocked(db, appId)) {
+        await rt.driver.stopDeployment(appId, pre.deploymentId);
+        return { error: 'security_blocked', reason: 'deploy.error.security_blocked' };
+      }
       const health = await waitHealthy(rt.driver, appId, pre.deploymentId, rt.health);
       if (!health.ok) {
         const logs = await collectLogs(rt.driver, appId, pre.deploymentId, secrets);

@@ -2,6 +2,7 @@ import { request as httpRequest, type IncomingHttpHeaders, type IncomingMessage,
 import type { Duplex } from 'node:stream';
 import { Transform } from 'node:stream';
 import type { Socket } from 'node:net';
+import { trustedClientIp } from 'api/security-client-ip';
 
 export const MAX_BODY_BYTES = 25 * 1024 * 1024;
 export const CONNECT_TIMEOUT_MS = 5_000;
@@ -17,13 +18,7 @@ export interface ProxyTarget { host: string; port: number }
  * hops-th entry from the right of X-Forwarded-For; with 0 (nothing in front) only the socket address is trusted.
  */
 export function clientAddress(xff: string | string[] | undefined, socketAddr: string | undefined, hops: number): string {
-  const header = Array.isArray(xff) ? xff.join(',') : xff;
-  if (hops > 0 && header) {
-    const parts = header.split(',').map((p) => p.trim()).filter(Boolean);
-    const hit = parts[parts.length - hops];
-    if (hit) return hit;
-  }
-  return socketAddr ?? '';
+  return trustedClientIp(xff, socketAddr, hops) ?? '';
 }
 
 export interface ProxyOptions {
@@ -135,6 +130,8 @@ export function proxyRequest(
       if (done) return res.destroy();
       done = true;
       res.setTimeout(opts.idleTimeoutMs ?? IDLE_TIMEOUT_MS, () => res.destroy(new Error('idle timeout')));
+      // 応答が始まった後でも、中断（クライアントの離脱・遮断）で上流を切る。
+      opts.signal?.addEventListener('abort', () => { res.destroy(); upstream.destroy(); }, { once: true });
       const it = res[Symbol.asyncIterator]();
       const body = new ReadableStream<Uint8Array>({
         async pull(ctrl) {

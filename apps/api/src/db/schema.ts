@@ -484,3 +484,90 @@ export const eventBoosts = pgTable('event_boosts', {
   check('event_boosts_period_check', sql`${t.endsAt} > ${t.startsAt}`),
   check('event_boosts_name_check', sql`char_length(${t.eventName}) between 1 and 100 AND ${t.expectedVisits} >= 0`),
 ]);
+
+/**
+ * セキュリティ事件（フェーズ 6 Task 1）。作るのは `handleSecuritySignal` だけ。証拠は許可リストのキーだけで、
+ * 本文・環境変数・生の IP は入らない。IP は HMAC（`ip_hash`）。(source, source_event_id) で重複を排除する。
+ */
+export const securityIncidents = pgTable('security_incidents', {
+  id: id(),
+  source: text('source').notNull(),
+  sourceEventId: text('source_event_id').notNull(),
+  ruleVersion: text('rule_version').notNull(),
+  severity: text('severity', { enum: ['low', 'medium', 'high'] }).notNull(),
+  targetKind: text('target_kind', { enum: ['app', 'account', 'ip'] }).notNull(),
+  appId: uuid('app_id').references(() => apps.id, { onDelete: 'cascade' }),
+  accountId: uuid('account_id').references(() => accounts.id, { onDelete: 'cascade' }),
+  ipHash: text('ip_hash'),
+  reasonCode: text('reason_code').notNull(),
+  evidence: jsonb('evidence').notNull().default(sql`'{}'::jsonb`),
+  evidenceDigest: text('evidence_digest').notNull(),
+  status: text('status', { enum: ['open', 'resolved'] }).notNull().default('open'),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+  createdAt: createdAt(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('security_incidents_source_event_idx').on(t.source, t.sourceEventId),
+  index('security_incidents_app_idx').on(t.appId),
+  check('security_incidents_target_check', sql`(
+    (${t.targetKind} = 'app' AND ${t.appId} IS NOT NULL AND ${t.accountId} IS NULL AND ${t.ipHash} IS NULL) OR
+    (${t.targetKind} = 'account' AND ${t.accountId} IS NOT NULL AND ${t.appId} IS NULL AND ${t.ipHash} IS NULL) OR
+    (${t.targetKind} = 'ip' AND ${t.ipHash} IS NOT NULL AND ${t.appId} IS NULL AND ${t.accountId} IS NULL)
+  )`),
+]);
+
+/**
+ * 有効なブロック理由（`released_at` が null のもの）。アプリ・アカウント・IP の対象ごと、理由ごとに 1 行。
+ * 解除は対象の理由だけで、データ・DB・イメージは消さない。オーナーの `usage_states` とは別管理。
+ */
+export const securityBlocks = pgTable('security_blocks', {
+  id: id(),
+  incidentId: uuid('incident_id').notNull().references(() => securityIncidents.id, { onDelete: 'cascade' }),
+  targetKind: text('target_kind', { enum: ['app', 'account', 'ip'] }).notNull(),
+  appId: uuid('app_id').references(() => apps.id, { onDelete: 'cascade' }),
+  accountId: uuid('account_id').references(() => accounts.id, { onDelete: 'cascade' }),
+  ipHash: text('ip_hash'),
+  reasonCode: text('reason_code').notNull(),
+  createdAt: createdAt(),
+  releasedAt: timestamp('released_at', { withTimezone: true }),
+  releasedBy: uuid('released_by').references(() => operators.accountId),
+  releaseNote: text('release_note'),
+}, (t) => [
+  uniqueIndex('security_blocks_active_idx').on(t.targetKind, sql`coalesce(${t.appId}::text, ${t.accountId}::text, ${t.ipHash})`, t.reasonCode).where(sql`${t.releasedAt} IS NULL`),
+  index('security_blocks_app_idx').on(t.appId).where(sql`${t.releasedAt} IS NULL`),
+  index('security_blocks_ip_idx').on(t.ipHash).where(sql`${t.releasedAt} IS NULL`),
+  check('security_blocks_target_check', sql`(
+    (${t.targetKind} = 'app' AND ${t.appId} IS NOT NULL AND ${t.accountId} IS NULL AND ${t.ipHash} IS NULL) OR
+    (${t.targetKind} = 'account' AND ${t.accountId} IS NOT NULL AND ${t.appId} IS NULL AND ${t.ipHash} IS NULL) OR
+    (${t.targetKind} = 'ip' AND ${t.ipHash} IS NOT NULL AND ${t.appId} IS NULL AND ${t.accountId} IS NULL)
+  )`),
+]);
+
+/** 耐久 outbox。コンテナ停止・通知・Object Lock 配送を事件と同じ transaction で積み、worker が再試行する。 */
+export const securityOutbox = pgTable('security_outbox', {
+  id: id(),
+  incidentId: uuid('incident_id').notNull().references(() => securityIncidents.id, { onDelete: 'cascade' }),
+  kind: text('kind', { enum: ['stop_app', 'notify_operator', 'notify_owner', 'deliver_audit'] }).notNull(),
+  /** 副作用の一意キー。同じ副作用を二重に積まない。 */
+  effectKey: text('effect_key').notNull().unique(),
+  payload: jsonb('payload').notNull().default(sql`'{}'::jsonb`),
+  attempts: integer('attempts').notNull().default(0),
+  nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
+  doneAt: timestamp('done_at', { withTimezone: true }),
+  failureCode: text('failure_code'),
+  createdAt: createdAt(),
+}, (t) => [index('security_outbox_due_idx').on(t.nextAttemptAt).where(sql`${t.doneAt} IS NULL`)]);
+
+/**
+ * 自動対処のシステム用監査連鎖（運営者の `admin_audit_log` とは別）。追記専用で、seq / prev_hash / hash はトリガーが決める。
+ * アカウントとの対応は持たない（匿名の事件 ID・操作・時刻・理由コード・ハッシュだけ）。
+ */
+export const securityAudit = pgTable('security_audit', {
+  seq: bigint('seq', { mode: 'number' }).primaryKey(),
+  incidentId: uuid('incident_id').notNull(),
+  action: text('action').notNull(),
+  detail: jsonb('detail').notNull().default(sql`'{}'::jsonb`),
+  createdAt: createdAt(),
+  prevHash: text('prev_hash').notNull().default(''),
+  hash: text('hash').notNull().default(''),
+});

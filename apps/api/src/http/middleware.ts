@@ -28,7 +28,17 @@ const MAX_BUCKETS = 10_000;
  * Resolves the account from the session cookie or, unless `bearer: false`, from `Authorization: Bearer ysk_...`.
  * Bearer requests get sessionId '' (they have no session). Routes that manage credentials must pass `bearer: false`.
  */
-export function requireSession(db: Db, opts: { bearer?: boolean; clientIp?: (c: Context) => string; maxFailures?: number } = {}): MiddlewareHandler {
+export function requireSession(db: Db, opts: { bearer?: boolean; clientIp?: (c: Context) => string; maxFailures?: number; accountBlocked?: (accountId: string) => Promise<boolean> } = {}): MiddlewareHandler {
+  /** セキュリティ上のアカウント遮断中は、変更（GET / HEAD 以外）だけ止める。状態の閲覧は続けられる。判定できなければ 503。 */
+  const gateAccount = async (c: Context, accountId: string): Promise<Response | null> => {
+    if (!opts.accountBlocked || c.req.method === 'GET' || c.req.method === 'HEAD') return null;
+    try {
+      return (await opts.accountBlocked(accountId)) ? c.json({ error: 'security_blocked' }, 403) : null;
+    } catch (e) {
+      console.error('account security gate failed', e);
+      return c.json({ error: 'unavailable' }, 503);
+    }
+  };
   const bearer = opts.bearer ?? true;
   // Failed Bearer attempts per client IP (default 30 per 10 minutes) before answering 429.
   const failed = new Map<string, { count: number; resetAt: number }>();
@@ -53,6 +63,8 @@ export function requireSession(db: Db, opts: { bearer?: boolean; clientIp?: (c: 
         if (f) f.count++;
         return c.json({ error: 'unauthorized' }, 401);
       }
+      const denied = await gateAccount(c, t.accountId);
+      if (denied) return denied;
       c.set('accountId', t.accountId);
       c.set('sessionId', '');
       return next();
@@ -60,6 +72,8 @@ export function requireSession(db: Db, opts: { bearer?: boolean; clientIp?: (c: 
     const token = getCookie(c, SESSION_COOKIE);
     const s = token ? await resolveSession(db, token) : null;
     if (!s) return c.json({ error: 'unauthorized' }, 401);
+    const denied = await gateAccount(c, s.accountId);
+    if (denied) return denied;
     c.set('accountId', s.accountId);
     c.set('sessionId', s.sessionId);
     await next();

@@ -3,6 +3,7 @@ import { ArchiveError, BUCKETS, JOBS, appPrefix, extractArchive, removeAppImages
 import { UUID } from '../auth/cross-device.js';
 import { withSystem, type Db } from '../db/client.js';
 import { apps, deployments } from '../db/schema.js';
+import { isAppBlocked } from '../security/gate.js';
 import { processDynamicDeployment, type DynamicRuntime } from './dynamic.js';
 import { LIMITS, entryPath, inspect, relativeToPublishDir } from './inspect.js';
 
@@ -84,6 +85,10 @@ export async function processDeployment(
         return;
       }
       const done = { siteKey, totalBytes: out.bytes, fileCount: out.files, finishedAt: new Date(), message: null };
+      if (await isAppBlocked(tx, appId)) {
+        await tx.update(deployments).set({ ...done, status: 'built', message: 'deploy.error.security_blocked' }).where(eq(deployments.id, deploymentId));
+        return;
+      }
       const newer = await tx.execute(sql`
         SELECT 1 FROM deployments WHERE app_id = ${appId} AND status = 'live'
           AND (created_at, id) > (SELECT created_at, id FROM deployments WHERE id = ${deploymentId}) LIMIT 1`);

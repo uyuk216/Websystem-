@@ -11,6 +11,9 @@ import type { StoredObject } from 'platform';
 import type { Duplex } from 'node:stream';
 import type { Waker } from 'platform';
 import type { AccessLogger } from 'api/logs';
+import { securityGate, pausedPage } from 'api/security-gate';
+import { hashIp } from 'api/security-ip';
+import type { ConnectionRegistry } from './connections.js';
 import { clientAddress, proxyRequest, proxyUpgrade, type ProxyFailure } from './proxy.js';
 import { candidates, contentTypeFor, parsePath, pickLocale, resolveSite } from './site.js';
 
@@ -30,6 +33,11 @@ export interface StaticAppDeps {
   accessLog?: Pick<AccessLogger, 'record'>;
   /** How long a name -> live site lookup is reused (default 3s: a rollback or new deployment can take up to this long to show per static process). */
   siteCacheMs?: number;
+  /**
+   * 自動対処の遮断（フェーズ 6）。指定すると、すべての HTTP / WebSocket が配信・プロキシの前に `securityGate` を通る
+   * （許可は毎回引き直す。判定できなければ 503）。`connections` に登録した WebSocket・長い応答は、遮断の commit 後に閉じられる。
+   */
+  security?: { hashKey: Buffer; connections?: ConnectionRegistry };
   /** Dynamic apps. Without it, dynamic apps answer 503 (runtime disabled). */
   dynamic?: {
     waker: Pick<Waker, 'ensure' | 'invalidate'>;
@@ -90,17 +98,22 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
   }
 
   /** Streams the object, counting every chunk that is handed to the client. */
-  function counted(appId: string, body: Readable): ReadableStream<Uint8Array> {
+  function counted(appId: string, body: Readable, ip: string): ReadableStream<Uint8Array> {
     const it = body[Symbol.asyncIterator]();
+    const untrack = deps.security?.connections?.add({ appId, ipHash: hashIp(ip, deps.security.hashKey), close: () => body.destroy(new Error('security gate closed stream')) });
+    body.once('close', () => untrack?.());
     return new ReadableStream<Uint8Array>({
       async pull(ctrl) {
-        const r = await it.next();
-        if (r.done) return ctrl.close();
-        const chunk = r.value as Uint8Array;
-        deps.meter.record(appId, chunk.byteLength);
-        ctrl.enqueue(chunk);
+        try {
+          const r = await it.next();
+          if (r.done) { untrack?.(); return ctrl.close(); }
+          const chunk = r.value as Uint8Array;
+          deps.meter.record(appId, chunk.byteLength);
+          ctrl.enqueue(chunk);
+        } catch (e) { untrack?.(); ctrl.error(e); }
       },
       async cancel() {
+        untrack?.();
         body.destroy();
       },
     });
@@ -128,6 +141,24 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
     return c.html(page(t(locale, 'transfer.limitTitle'), t(locale, 'transfer.limitBody'), locale), 503, {
       ...SECURITY_HEADERS, 'Retry-After': String(secondsUntilNextMonth(now())), 'Cache-Control': 'no-store',
     });
+  };
+
+  /** 遮断の判定。遮断中は 503（日英の一時停止ページ、no-store）、判定不能も 503。通せるなら null。 */
+  async function gateHttp(c: Context, appId: string | undefined, ip: string): Promise<Response | null> {
+    if (!deps.security) return null;
+    const locale = pickLocale(c.req.header('accept-language'));
+    try {
+      const v = await securityGate(deps.db, { appId, clientIp: ip, hashKey: deps.security.hashKey });
+      if (v.allow) return null;
+      return c.html(pausedPage(locale, 'paused'), 503, { ...SECURITY_HEADERS, 'Cache-Control': 'no-store' });
+    } catch (e) {
+      console.error('security gate failed', e);
+      return c.html(pausedPage(locale, 'unavailable'), 503, { ...SECURITY_HEADERS, 'Retry-After': '5', 'Cache-Control': 'no-store' });
+    }
+  }
+  const requestIp = (c: Context): string => {
+    const incoming = (c.env as { incoming?: IncomingMessage } | undefined)?.incoming;
+    return incoming ? clientAddress(incoming.headers['x-forwarded-for'], incoming.socket.remoteAddress, hops) : '';
   };
 
   const blockCache = new Map<string, { at: number; until: Date | null }>();
@@ -164,10 +195,16 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
     const abort = new AbortController();
     const onGone = () => abort.abort();
     incoming.socket.once('close', onGone);
+    const untrack = deps.security?.connections?.add({
+      appId: site.appId, ipHash: hashIp(clientAddress(incoming.headers['x-forwarded-for'], incoming.socket.remoteAddress, hops), deps.security.hashKey),
+      close: () => abort.abort(),
+    });
     try {
       const woke = await deps.dynamic.waker.ensure(site.appId, site.deploymentId);
       if (abort.signal.aborted) return new Response(null, { status: 499 });
       if (!woke.ok) return startFailed(c);
+      const stopped = await gateHttp(c, site.appId, requestIp(c));
+      if (stopped) return stopped;
       // The target is always the driver's endpoint, never anything derived from the request.
       const r = await proxyRequest(incoming, { host: woke.host, port: woke.port }, {
         clientIp: clientAddress(incoming.headers['x-forwarded-for'], incoming.socket.remoteAddress, hops),
@@ -186,6 +223,11 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
       return c.text('Bad Gateway', 502);
     } finally {
       incoming.socket.off('close', onGone);
+      // 応答の本体を流している間も登録しておき、終わったら外す。
+      if (untrack) {
+        const outgoing = (c.env as { outgoing?: { once(e: 'close', fn: () => void): unknown; writableEnded?: boolean } } | undefined)?.outgoing;
+        if (outgoing) outgoing.once('close', untrack); else incoming.socket.once('close', untrack);
+      }
     }
   }
 
@@ -193,6 +235,7 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
     // First thing, before any await: a client reset while the app is starting must not be an uncaught 'error'.
     let closed = false;
     let keepAlive: NodeJS.Timeout | undefined;
+    let untrackWs: (() => void) | undefined;
     // Access log for upgrades: one entry when the tunnel closes (101 and the bytes relayed), or the refusal status.
     let wsAppId: string | null = null;
     let wsBytes = 0;
@@ -210,18 +253,25 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
       } catch (e) { console.error('access log failed', e); }
       wsAppId = null;
     };
-    const cleanup = () => { closed = true; clearInterval(keepAlive); wsLog(); };
+    const cleanup = () => { closed = true; clearInterval(keepAlive); untrackWs?.(); wsLog(); };
     socket.on('error', cleanup);
     socket.on('close', cleanup);
     const reply = (status: string) => {
       if (wsAppId && !wsStatus) wsStatus = Number(status.slice(0, 3));
-      if (!closed) socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+      if (!closed) socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nCache-Control: no-store\r\nContent-Length: 0\r\n\r\n`);
     };
     void (async () => {
       if (String(req.headers.upgrade ?? '').toLowerCase() !== 'websocket') return reply('400 Bad Request');
       const name = resolveSite(req.headers.host ?? '', deps.baseDomain);
       const site = name ? await lookup(name) : null;
       if (closed) return;
+      const wsIp = clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress, hops);
+      if (deps.security) {
+        // 遮断中・判定不能は 503。許可は毎回引き直す。
+        const v = await securityGate(deps.db, { appId: site?.appId, clientIp: wsIp, hashKey: deps.security.hashKey }).catch((e: unknown) => { console.error('security gate failed', e); return null; });
+        if (closed) return;
+        if (!v?.allow) { if (site) wsAppId = site.appId; return reply('503 Service Unavailable'); }
+      }
       if (!site || site.kind !== 'dynamic') return reply('404 Not Found');
       wsAppId = site.appId;
       if (await deps.meter.isBlocked(site.appId)) return reply('503 Service Unavailable');
@@ -232,6 +282,9 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
       const woke = await deps.dynamic.waker.ensure(site.appId, site.deploymentId);
       if (closed || socket.destroyed) return; // the client left while the app was starting
       if (!woke.ok) return reply('503 Service Unavailable');
+      if (deps.security && !(await securityGate(deps.db, { appId: site.appId, clientIp: wsIp, hashKey: deps.security.hashKey })).allow) return reply('503 Service Unavailable');
+      // 遮断が commit されたら、この接続も閉じる（登録簿が DB の通知と定期の再照合で見る）。
+      if (deps.security?.connections) untrackWs = deps.security.connections.add({ appId: site.appId, ipHash: hashIp(wsIp, deps.security.hashKey), close: () => socket.destroy() });
       // A long-lived connection keeps the app awake; cleared when the socket closes.
       keepAlive = setInterval(() => touch(site.appId), 30_000);
       try {
@@ -251,6 +304,8 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
   app.handleUpgrade = handleUpgrade;
   app.use('*', async (c, next) => {
     await next();
+    // Shared caches must not bypass the next security decision, including dynamic responses.
+    if (deps.security) { c.header('Cache-Control', 'no-store'); c.header('CDN-Cache-Control', 'no-store'); }
     const appId = c.get('logAppId' as never) as string | undefined;
     if (!appId || !deps.accessLog) return;
     try {
@@ -294,12 +349,16 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
     if (method !== 'GET' && method !== 'HEAD') {
       const dyn = name ? await lookup(name) : null;
       if (dyn) c.set('logAppId' as never, dyn.appId as never);
+      const stopped = await gateHttp(c, dyn?.appId, requestIp(c));
+      if (stopped) return stopped;
       if (dyn?.kind === 'dynamic') return proxyDynamic(c, dyn);
       return c.body('Method Not Allowed', 405, headers({ Allow: 'GET, HEAD' }));
     }
-    if (!name) return notFound();
-    const site0 = await lookup(name);
+    const site0 = name ? await lookup(name) : null;
     if (site0) c.set('logAppId' as never, site0.appId as never);
+    const stopped = await gateHttp(c, site0?.appId, requestIp(c));
+    if (stopped) return stopped;
+    if (!name) return notFound();
     if (site0?.kind === 'dynamic') return proxyDynamic(c, site0);
     const parsed = parsePath(rawPath(c));
     if ('status' in parsed && parsed.status === 400) return c.text('Bad Request', 400, headers());
@@ -320,7 +379,7 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
       const etag = `"${createHash('sha1').update(`${site.siteKey}${key}`).update(String(obj.size)).digest('hex').slice(0, 32)}"`;
       const h = headers({
         'Content-Type': contentTypeFor(key),
-        'Cache-Control': status === 200 ? 'public, max-age=60' : 'no-cache',
+        'Cache-Control': deps.security ? 'no-store' : status === 200 ? 'public, max-age=60' : 'no-cache',
         ...(status === 200 ? { ETag: etag } : {}),
       });
       if (status === 200 && c.req.header('if-none-match')?.split(',').some((v) => v.trim().replace(/^W\//, '') === etag)) {
@@ -332,7 +391,7 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
         obj.body.destroy();
         return c.body(null, status, h);
       }
-      return c.body(counted(site.appId, obj.body), status, h);
+      return c.body(counted(site.appId, obj.body, requestIp(c)), status, h);
     };
 
     if (!('status' in parsed)) {

@@ -23,3 +23,8 @@ export {
   EVENT_BOOST_MAX_DAYS, EVENT_BOOST_LEAD_DAYS, EVENT_BOOST_MAX_VISITS, validateBoostRequest,
 } from './starter.js';
 export type { StarterInput, StarterInputError, BoostRequestInput, BoostRequestError } from './starter.js';
+export {
+  SIGNAL_SOURCES, SEVERITIES, TARGET_KINDS, EVIDENCE_KEYS, UUID_RE, IP_HASH_RE, REASON_CODE_RE,
+  severityRank, maxSeverity, planFor, validateSignalShape, canonicalEvidence,
+} from './security.js';
+export type { SignalSource, Severity, TargetKind, SecurityTarget, SecuritySignal, Plan as SecurityPlan, SignalError } from './security.js';

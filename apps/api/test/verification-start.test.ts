@@ -79,7 +79,7 @@ describe('POST /verification/start', () => {
   it('answers 403 and creates nothing when the network is a VPN / Tor exit', () => withTestDb(async (db) => {
     for (const [reason, ip] of [['vpn', '203.0.113.7'], ['tor', '198.51.100.9']] as const) {
       const { app, cookie } = await setup(db, { network: staticNetworkReputation({ [ip]: reason }), trustedProxyHops: 1 }, ip);
-      const res = await app.request('/verification/start', { method: 'POST', headers: { ...cookie, 'x-forwarded-for': ip }, body: JSON.stringify(body) });
+      const res = await app.request('/verification/start', { method: 'POST', headers: { ...cookie, 'x-forwarded-for': ip }, body: JSON.stringify(body) }, { incoming: { socket: { remoteAddress: '127.0.0.1' } } });
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: 'network_blocked' });
       expect(await db.select().from(studentVerifications)).toHaveLength(0);

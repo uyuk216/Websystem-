@@ -69,8 +69,11 @@ spec:
             - { name: EDGE_PROTO, value: http }
             # Traefik (the cluster ingress) is the one proxy in front of the edge.
             - { name: EDGE_TRUSTED_PROXY_HOPS, value: "1" }
+            - { name: SECURITY_GATE_BIND, value: "0.0.0.0" }
           ports:
             - containerPort: 8090
+            # 内部の遮断判定口（Traefik の ForwardAuth 専用。内部ネットワークの接続元だけを受ける）。
+            - containerPort: 8091
           readinessProbe:
             tcpSocket: { port: 8090 }
             periodSeconds: 3
@@ -91,8 +94,44 @@ metadata:
 spec:
   selector: { app: ys-edge }
   ports:
-    - port: 80
-      targetPort: 8090
+    - { name: http, port: 80, targetPort: 8090 }
+    - { name: gate, port: 8091, targetPort: 8091 }
+---
+# セキュリティ遮断の共通判定（フェーズ 6 Task 2）。Traefik が全リクエストの前に edge の内部判定口へ問い合わせる。
+# 2xx で通し、それ以外（遮断・判定不能の 503・口に届かない 5xx）はそのまま訪問者に返す（届かないときも通さない）。
+# Traefik は X-Forwarded-Host / -For を自分で付け直す（trustForwardHeader: false）ので、訪問者は名乗れない。
+# k3s 同梱の Traefik の CRD（traefik.io/v1alpha1）を使う。追加の導入は無い。
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ys-security-gate
+  namespace: ys-system
+spec:
+  forwardAuth:
+    address: http://ys-edge.ys-system.svc.cluster.local:8091/gate
+    trustForwardHeader: false
+    authRequestHeaders: [Accept-Language]
+---
+# Only the ingress controller may call the internal decision listener or supply trusted forwarding headers.
+# CDN contract: bypass shared caching for these routes (including successful responses); Cloudflare rollout is Phase 8.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ys-edge-ingress
+  namespace: ys-system
+spec:
+  podSelector:
+    matchLabels: { app: ys-edge }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { app.kubernetes.io/name: traefik }
+      ports:
+        - { protocol: TCP, port: 8090 }
+        - { protocol: TCP, port: 8091 }
 ---
 # Every host goes to the edge; the k3d load balancer publishes it on the Mac at localhost:8081.
 apiVersion: networking.k8s.io/v1
@@ -100,6 +139,8 @@ kind: Ingress
 metadata:
   name: ys-edge
   namespace: ys-system
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: ys-system-ys-security-gate@kubernetescrd
 spec:
   defaultBackend:
     service:

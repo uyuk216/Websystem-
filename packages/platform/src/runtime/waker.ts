@@ -5,7 +5,7 @@ export const WAKE_TIMEOUT_MS = 30_000;
 
 export type WakeResult =
   | { ok: true; host: string; port: number }
-  | { ok: false; reason: 'timeout' | 'failed' | 'missing' };
+  | { ok: false; reason: 'timeout' | 'failed' | 'missing' | 'blocked' };
 
 export interface WakerOptions {
   driver: RuntimeDriver;
@@ -17,6 +17,11 @@ export interface WakerOptions {
    */
   withLock?<T>(appId: string, fn: () => Promise<T>, opts?: { timeoutMs?: number }): Promise<T>;
   health?: HealthOptions;
+  /**
+   * Asked inside the wake lock, right before the container is started: false refuses the start (`blocked`).
+   * Used for security blocks, so a wake cannot restart an app that was stopped for a security reason. Not cached.
+   */
+  allowStart?(appId: string): Promise<boolean>;
   timeoutMs?: number;
   /** How long a known-good endpoint is reused without asking the driver (default 5s). */
   endpointTtlMs?: number;
@@ -88,7 +93,7 @@ export class Waker {
     if (!p) {
       p = this.wake(appId, deploymentId, Date.now() + this.timeoutMs).then((r) => {
         if (r.ok) this.good.set(key, { at: Date.now(), host: r.host, port: r.port });
-        else if (r.reason !== 'timeout') this.bad.set(key, { at: Date.now(), reason: r.reason });
+        else if (r.reason === 'failed' || r.reason === 'missing') this.bad.set(key, { at: Date.now(), reason: r.reason });
         if (this.good.size > 5000) this.good.clear();
         if (this.bad.size > 5000) this.bad.clear();
         return r;
@@ -142,6 +147,11 @@ export class Waker {
           if (ep) return { ok: true, ...ep };
         }
         if (!spec) return { ok: false, reason: 'missing' };
+        if (this.opts.allowStart) {
+          const allowed = await within(this.opts.allowStart(appId));
+          if (allowed === TIMED_OUT) return { ok: false, reason: 'timeout' };
+          if (!allowed) return { ok: false, reason: 'blocked' };
+        }
         if (left() <= 0) return { ok: false, reason: 'timeout' };
         const started = await within(driver.start(spec));
         if (started === TIMED_OUT) return { ok: false, reason: 'timeout' };

@@ -14,6 +14,8 @@ import { deleteAppStorage, processDeployment, sweepStaleDeployments } from '../s
 import { createApp as createHttpApp } from '../src/http/app.js';
 import { createFakeMailer } from './helpers/fake-mailer.js';
 import { createSession } from '../src/auth/sessions.js';
+import { buildSignal } from '../src/security/signals.js';
+import { handleSecuritySignal } from '../src/security/incidents.js';
 
 const env = {
   S3_ENDPOINT: process.env.S3_ENDPOINT ?? 'http://localhost:9000',
@@ -47,6 +49,21 @@ const active = async (db: TestDb, appId: string) => (await db.select().from(apps
 const cleanup = (appId: string) => deleteAppStorage(storage, appId);
 
 describe('deployments', () => {
+  it('a security block preserves the old static deployment and the newly built files', () => withTestDb(async (db) => {
+    const { a, appId } = await setup(db);
+    try {
+      const old = await deploy(db, a, appId, { 'index.html': 'old' });
+      await processDeployment(db, storage, old);
+      await handleSecuritySignal(db, buildSignal({ source: 'manual', sourceEventId: 'static-block', ruleVersion: '1', occurredAt: new Date(), severity: 'medium', target: { kind: 'app', appId }, reasonCode: 'security.test', evidence: {} }));
+      const next = await deploy(db, a, appId, { 'index.html': 'new' });
+      await processDeployment(db, storage, next);
+      expect(await active(db, appId)).toBe(old);
+      expect(await row(db, next)).toMatchObject({ status: 'built', message: 'deploy.error.security_blocked' });
+      expect(await storage.sites.head(`${appId}/${next}/index.html`)).not.toBeNull();
+      expect(await rollback(db, a.id, appId, old)).toMatchObject({ error: 'security_blocked' });
+    } finally { await cleanup(appId); }
+  }));
+
   it('queues, processes and goes live with index.html under siteKey', () => withTestDb(async (db) => {
     const { a, appId } = await setup(db);
     const id = await deploy(db, a, appId, { 'index.html': '<h1>hi</h1>', 'css/a.css': 'a{}' });

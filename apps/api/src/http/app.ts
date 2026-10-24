@@ -1,3 +1,5 @@
+import { trustedClientIp } from '../security/client-ip.js';
+import { securityGate } from '../security/gate.js';
 import { planGuidance } from '../usage/plan-guidance.js';
 import { getPlanStatus, getVerificationStatus } from '../grants/plan-status.js';
 import { Hono, type Context } from 'hono';
@@ -62,6 +64,8 @@ export interface AppDeps {
   /** VPN / Tor detection for student ID submissions (phase 6 supplies the real IP database; default: allow all). */
   network?: NetworkReputation;
   trustedProxyHops?: number;
+  /** 自動対処の遮断（フェーズ 6）。IP のブロックは入口で、アカウントのブロックは認証後の変更系で適用する。`hashKey` は IP の HMAC 鍵。 */
+  security?: { hashKey: Buffer };
   /**
    * Starter Grant の申請（Task 8）。GitHub アカウントの作成日の確認は注入式（テストは偽物）。SMS 認証の差し替え口はプロバイダーが決まる
    * フェーズ 8 まで未設定でよい（未設定なら SMS のルートは 503）。電話番号は保存せず、HMAC のハッシュ（`hashKey`）だけを重複確認に使う。
@@ -85,12 +89,7 @@ export interface AppDeps {
 
 /** Client IP: the socket address, or with N trusted proxy hops the Nth X-Forwarded-For entry from the right. */
 export function resolveClientIp(xff: string | undefined, socketAddr: string | undefined, hops: number): string {
-  if (hops > 0 && xff) {
-    const parts = xff.split(',').map((p) => p.trim()).filter(Boolean);
-    const hit = parts[parts.length - hops];
-    if (hit) return hit;
-  }
-  return socketAddr || 'unknown';
+  return trustedClientIp(xff, socketAddr, hops) ?? 'unknown';
 }
 
 declare module 'hono' {
@@ -111,6 +110,21 @@ export function createApp(deps?: AppDeps): Hono {
     return resolveClientIp(c.req.header('x-forwarded-for'), addr, hops);
   };
   const app = new Hono();
+  if (deps?.security) {
+    const { hashKey } = deps.security;
+    // 判定できないときは 503（根拠のない恒久ブロックはしない）。許可は毎回引き直す。
+    app.use('*', async (c, next) => {
+      if (c.req.path === '/healthz') return next();
+      try {
+        const v = await securityGate(deps.db, { clientIp: clientIp(c), hashKey });
+        if (!v.allow) return c.json({ error: 'security_blocked' }, 403);
+      } catch (e) {
+        console.error('security gate failed', e);
+        return c.json({ error: 'unavailable' }, 503);
+      }
+      await next();
+    });
+  }
   // Per-browser device id; requesterDeviceId for email challenges comes from it.
   app.use('*', async (c, next) => {
     let id = getCookie(c, DEVICE_COOKIE);
@@ -218,9 +232,10 @@ export function createApp(deps?: AppDeps): Hono {
       await logLogin(c, r.accountId, 'email', false);
       return c.json({ ok: true, recoveryCode: r.recoveryCode });
     });
-    const session = requireSession(deps.db, { clientIp });
+    const accountBlocked = deps.security && (async (accountId: string) => !(await securityGate(deps.db, { accountId, hashKey: deps.security!.hashKey })).allow);
+    const session = requireSession(deps.db, { clientIp, accountBlocked });
     // Credential management and account-security routes: session cookie only, never an API token.
-    const cookieSession = requireSession(deps.db, { bearer: false });
+    const cookieSession = requireSession(deps.db, { bearer: false, accountBlocked });
     app.post('/auth/passkey/register/start', cookieSession, async (c) => c.json(await startPasskeyRegistration(deps.db, c.get('accountId'), deps.config)));
     app.post('/auth/passkey/register/finish', cookieSession, attemptLimit, async (c) => {
       const b = await c.req.json().catch(() => null) as Record<string, unknown> | null;
@@ -395,7 +410,7 @@ export function createApp(deps?: AppDeps): Hono {
     if (deps.storage && deps.queue) {
       const storage = deps.storage;
       const queue = deps.queue;
-      const depStatus = { not_found: 404, forbidden: 403, too_large: 413, invalid: 400, invalid_state: 409, start_failed: 502, runtime_limit: 409 } as const;
+      const depStatus = { not_found: 404, forbidden: 403, too_large: 413, invalid: 400, invalid_state: 409, start_failed: 502, runtime_limit: 409, security_blocked: 423 } as const;
       // Multipart overhead on top of the archive limit; the exact archive size is enforced while streaming.
       const uploadLimit = bodyLimit({
         maxSize: (deps.uploadMaxBytes ?? STATIC_LIMITS.storageBytes) + 1024 * 1024,
@@ -434,7 +449,7 @@ export function createApp(deps?: AppDeps): Hono {
     }
     app.post('/apps/:id/restart', session, async (c) => {
       const r = await restart(deps.db, c.get('accountId'), c.req.param('id'), deps.runtime);
-      return 'error' in r ? c.json(r, ({ not_found: 404, forbidden: 403, invalid_state: 409, start_failed: 502, runtime_limit: 409 } as const)[r.error]) : c.json(r);
+      return 'error' in r ? c.json(r, ({ not_found: 404, forbidden: 403, invalid_state: 409, start_failed: 502, runtime_limit: 409, security_blocked: 423 } as const)[r.error]) : c.json(r);
     });
     app.get('/apps/:id/access-logs', session, async (c) => {
       const r = await listAccessLogs(deps.db, c.get('accountId'), c.req.param('id'), Number(c.req.query('limit') ?? 100));

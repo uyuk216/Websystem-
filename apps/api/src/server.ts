@@ -9,6 +9,7 @@ import { handleTunnelUpgrade } from './apps/database-tunnel.js';
 import { createWakeLocker } from './apps/wake.js';
 import { createMailer } from './mail/mailer.js';
 import { createGithubAccountLookup } from './verification/github-age.js';
+import { loadSecurityKey } from './security/config.js';
 
 const config = loadConfig(process.env);
 const { db } = createDb(config.databaseUrl);
@@ -21,6 +22,7 @@ const runtime = createDynamicRuntime(process.env, { db });
 // Rollbacks start containers under the same per-app wake lock as the worker and the edge (own small pool).
 if (runtime) runtime.lock = createWakeLocker(config.databaseUrl, 4).lock;
 const app = createApp({ db, runtime, mailer, config, trustedProxyHops: config.trustedProxyHops, storage, queue, uploadMaxBytes: config.uploadMaxBytes,
+  security: { hashKey: loadSecurityKey(process.env) },
   // SMS 認証のプロバイダーはフェーズ 8。それまで `sms` は渡さない（SMS のルートは 503）。
   starter: { githubAge: createGithubAccountLookup() },
   github: config.github && { webhookSecret: config.github.webhookSecret, client: createGithubClient(config.github) },

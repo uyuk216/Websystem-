@@ -8,6 +8,7 @@ import { startDatabaseWatch } from 'api/database-watch';
 import { startScheduledBackups } from 'api/database-backups';
 import { createMailer } from 'api/mailer';
 import { reconcileEventBoosts } from 'api/event-boost';
+import { drainSecurityOutbox, stopAppHandlers } from 'api/security-actions';
 import { defaultHandlers, registerHandlers } from './worker.js';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -16,8 +17,20 @@ if (!databaseUrl) throw new Error('Missing required env var: DATABASE_URL');
 // Throws with a clear message when the dynamic runtime is enabled but APP_ENV_KEY is missing.
 const { db, sql } = createDb(databaseUrl);
 const runtime = createDynamicRuntime(process.env, { db });
+// DB outbox survives process restarts; failed stops remain due for retry.
+let drainingSecurity = false;
+const securityTick = async () => {
+  if (!runtime || drainingSecurity) return;
+  drainingSecurity = true;
+  try { await drainSecurityOutbox(db, stopAppHandlers(runtime.driver, runtime.lock)); }
+  catch (e) { console.error('worker: security outbox failed', e); }
+  finally { drainingSecurity = false; }
+};
 const locker = runtime ? createWakeLocker(databaseUrl, 4) : undefined;
 if (runtime && locker) runtime.lock = locker.lock;
+await securityTick();
+const securityTimer = setInterval(() => { void securityTick(); }, 1000);
+securityTimer.unref();
 const storage = createStorage(loadStorageConfig(process.env));
 await storage.ensureBuckets();
 const emailKey = process.env.EMAIL_ENC_KEY ? Buffer.from(process.env.EMAIL_ENC_KEY, 'base64') : undefined;
@@ -70,6 +83,7 @@ console.log('worker: waiting for jobs');
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
+    clearInterval(securityTimer);
     void boss.stop({ graceful: true }).finally(() => {
       void locker?.close();
       storage.close();

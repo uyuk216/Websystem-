@@ -12,6 +12,7 @@ import { withSystem, type Db } from '../db/client.js';
 import { getRunInputs } from '../apps/databases.js';
 import { apps, deployments } from '../db/schema.js';
 import { runtimeBlockedUntil } from '../usage/runtime-hours.js';
+import { isAppBlocked } from '../security/gate.js';
 import { LIMITS, entryPath, inspect, relativeToPublishDir } from './inspect.js';
 
 export type DynamicJob = {
@@ -108,6 +109,7 @@ function kubernetesDatabases(env: NodeJS.ProcessEnv, db: Db): DatabaseDriver {
  * Null when the deployment has no image (or does not belong to the app).
  */
 export async function buildRunSpec(db: Db, rt: DynamicRuntime, appId: string, deploymentId: string, at: Date = new Date()): Promise<AppRunSpec | null> {
+  if (await isAppBlocked(db, appId)) return null;
   const [d] = await withSystem(db, (tx) => tx.select({ imageRef: deployments.imageRef, ownerId: apps.ownerId })
     .from(deployments).innerJoin(apps, eq(apps.id, deployments.appId))
     .where(sql`${deployments.id} = ${deploymentId} AND ${deployments.appId} = ${appId}`));
@@ -153,6 +155,14 @@ export async function rolloutDynamic(db: Db, deploymentId: string, rt?: DynamicR
       await removeImage(imageRef).catch(() => undefined);
       return;
     }
+    // 遮断中のアプリは起動しない。ビルド済みのまま（`built`）残し、解除後にロールバックで出せる。再デプロイで理由は外れない。
+    if (await isAppBlocked(db, appId)) {
+      await withSystem(db, async (tx) => {
+        await tx.update(deployments).set({ status: 'built', finishedAt: new Date(), message: 'deploy.error.security_blocked' })
+          .where(sql`${deployments.id} = ${deploymentId} AND ${deployments.status} = 'processing'`);
+      });
+      return;
+    }
     // An app being deployed counts as accessed, so it is not put to sleep right after going live.
     await withSystem(db, (tx) => tx.update(apps).set({ lastAccessAt: new Date() }).where(eq(apps.id, appId)));
     const run = await getRunInputs(db, rt, appId);
@@ -174,11 +184,12 @@ export async function rolloutDynamic(db: Db, deploymentId: string, rt?: DynamicR
       await removeImage(imageRef).catch(() => undefined);
       return;
     }
-    const stopOld = await withSystem(db, async (tx): Promise<string[] | null> => {
+    const stopOld = await withSystem(db, async (tx): Promise<string[] | 'blocked' | null> => {
       // Serialises with other finishing deployments and with rollbacks of this app.
       const [app] = await tx.select({ id: apps.id }).from(apps).where(eq(apps.id, appId)).for('update');
       const [cur] = await tx.select({ status: deployments.status }).from(deployments).where(eq(deployments.id, deploymentId));
       if (!app || cur?.status !== 'processing') return null; // app deleted / superseded meanwhile
+      if (await isAppBlocked(tx, appId)) return 'blocked'; // 起動の後に遮断された: 切り替えない
       const done = { finishedAt: new Date(), message: null };
       const newer = await tx.execute(sql`
         SELECT 1 FROM deployments WHERE app_id = ${appId} AND status = 'live'
@@ -195,6 +206,14 @@ export async function rolloutDynamic(db: Db, deploymentId: string, rt?: DynamicR
       await tx.update(apps).set({ activeDeploymentId: deploymentId, lastAccessAt: new Date() }).where(eq(apps.id, appId));
       return old.map((r) => r.id);
     });
+    if (stopOld === 'blocked') {
+      await driver.stopDeployment(appId, deploymentId);
+      await withSystem(db, async (tx) => {
+        await tx.update(deployments).set({ status: 'built', finishedAt: new Date(), message: 'deploy.error.security_blocked' })
+          .where(sql`${deployments.id} = ${deploymentId} AND ${deployments.status} = 'processing'`);
+      });
+      return;
+    }
     if (stopOld === null) {
       await driver.stopDeployment(appId, deploymentId);
       const [row] = await withSystem(db, (tx) => tx.select({ status: deployments.status }).from(deployments).where(eq(deployments.id, deploymentId)));

@@ -23,7 +23,14 @@
     "./starter": "./src/grants/starter.ts",
     "./admin-dangerous": "./src/admin/dangerous.ts",
     "./admin-handlers": "./src/admin/server.ts",
-    "./event-boost": "./src/grants/event-boost.ts"
+    "./event-boost": "./src/grants/event-boost.ts",
+    "./security": "./src/security/incidents.ts",
+    "./security-actions": "./src/security/actions.ts",
+    "./security-gate": "./src/security/gate.ts",
+    "./security-ip": "./src/security/ip.ts",
+    "./security-client-ip": "./src/security/client-ip.ts",
+    "./security-config": "./src/security/config.ts",
+    "./security-gate-server": "./src/security/internal-server.ts"
   },
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/server.ts",
