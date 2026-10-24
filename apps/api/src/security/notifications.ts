@@ -15,7 +15,7 @@ export function notificationHandlers(_db: Db, deps: { mailer: Mailer; emailKey: 
   // Operator links must stay on the Tailscale admin origin. Never derive them from request headers.
   const admin = new URL(deps.adminOrigin);
   if (admin.protocol !== 'https:' || !admin.hostname.endsWith('.ts.net') || admin.username || admin.password || admin.port || admin.pathname !== '/' || admin.search || admin.hash) throw new Error('Tailscale admin origin required');
-  const handler = (audience: 'owner' | 'operator'): NonNullable<OutboxHandlers['notify_owner']> => async (_payload, row, tx) => {
+  const handler = (audience: 'owner' | 'operator'): NonNullable<OutboxHandlers['notify_owner']> => async (_payload, row, tx, now) => {
     if (typeof _payload.notificationId === 'string') {
       const [notice] = await tx.select().from(securityNotifications).where(and(eq(securityNotifications.id, _payload.notificationId), eq(securityNotifications.incidentId, row.incidentId), isNull(securityNotifications.mailedAt))).for('update');
       if (!notice) return;
@@ -38,7 +38,7 @@ export function notificationHandlers(_db: Db, deps: { mailer: Mailer; emailKey: 
         ? `${publicReason(locale)}\n${t(locale, 'security.action')}\n${new URL(`/${locale}/security`, deps.appOrigin).href}`
         : t(locale, 'security.operatorBody', { incidentId: incident.id, url: `${admin.origin}/#security/${incident.id}` });
       const [notice] = await tx.insert(securityNotifications).values({ accountId, incidentId: incident.id, effectKey: `${row.effectKey}:${accountId}`, audience, subject: t(locale, 'security.subject'), body }).onConflictDoNothing().returning();
-      if (notice) await enqueueOutbox(tx, { incidentId: incident.id, kind: audience === 'owner' ? 'notify_owner' : 'notify_operator', effectKey: `mail:${notice.effectKey}`, priority: row.priority, payload: { notificationId: notice.id } });
+      if (notice) await enqueueOutbox(tx, { incidentId: incident.id, kind: audience === 'owner' ? 'notify_owner' : 'notify_operator', effectKey: `mail:${notice.effectKey}`, priority: row.priority, now, payload: { notificationId: notice.id } });
     }
   };
   return { notify_owner: handler('owner'), notify_operator: handler('operator') };

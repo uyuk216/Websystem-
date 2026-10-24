@@ -1,3 +1,5 @@
+import { reportResponse } from './report-link.js';
+import type { DistributionSample } from 'api/security-distribution';
 import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { Hono, type Context } from 'hono';
@@ -26,6 +28,8 @@ export interface StaticAppDeps {
   storage: SiteReader;
   meter: Pick<TransferMeter, 'record' | 'isBlocked'>;
   baseDomain: string;
+  reportOrigin?: string;
+  distribution?: { record(sample: DistributionSample): Promise<void> };
   now?: () => Date;
   /** Proxies in front of the edge whose X-Forwarded-For is trusted (EDGE_TRUSTED_PROXY_HOPS; default 0). */
   trustedProxyHops?: number;
@@ -307,6 +311,12 @@ export function createStaticApp(deps: StaticAppDeps): StaticApp {
     // Shared caches must not bypass the next security decision, including dynamic responses.
     if (deps.security) { c.header('Cache-Control', 'no-store'); c.header('CDN-Cache-Control', 'no-store'); }
     const appId = c.get('logAppId' as never) as string | undefined;
+    if (appId && deps.reportOrigin) c.res = reportResponse(c.res, c.req.method, deps.reportOrigin, appId);
+    if (appId && deps.distribution && c.res.body && c.req.method !== 'HEAD' && ![204, 304].includes(c.res.status)) {
+      const reader = c.res.body.getReader(); let bytes = 0, finished = false;
+      const finish = async () => { if (finished) return; finished = true; await deps.distribution!.record({ appId, bytes, path: rawPath(c), referrer: c.req.header('referer') ?? null, origin: new URL(c.req.url).origin, at: +now() }); };
+      c.res = new Response(new ReadableStream<Uint8Array>({ async pull(ctrl) { try { const part = await reader.read(); if (part.done) { await finish(); ctrl.close(); } else { bytes += part.value.byteLength; ctrl.enqueue(part.value); } } catch (e) { await finish(); ctrl.error(e); } }, async cancel(reason) { await finish(); await reader.cancel(reason); } }), { status: c.res.status, headers: c.res.headers });
+    }
     if (!appId || !deps.accessLog) return;
     try {
       const log = deps.accessLog;

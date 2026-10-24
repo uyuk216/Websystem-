@@ -58,3 +58,29 @@ export function createSecurityGateApp(deps: GateServerDeps): Hono {
   });
   return app;
 }
+
+/** Collector-only app: mount on its own private listener, never on createApp/createAdminApp. */
+export function createDetectorApp(deps: { db: Db; falco: import('platform').FalcoAdapter }): Hono {
+  const app = new Hono();
+  app.post('/falco', async c => {
+    const peer = (c.env as { incoming?: IncomingMessage } | undefined)?.incoming?.socket.remoteAddress;
+    if (!isInternalPeer(peer)) return c.text('Forbidden', 403, NO_STORE);
+    const reader = c.req.raw.body?.getReader();
+    if (!reader) return c.text('Bad Request', 400, NO_STORE);
+    const chunks: Uint8Array[] = []; let bytes = 0;
+    try {
+      while (true) {
+        const part = await reader.read(); if (part.done) break;
+        bytes += part.value.byteLength;
+        if (bytes > 65536) { await reader.cancel(); return c.text('Too Large', 413, NO_STORE); }
+        chunks.push(part.value);
+      }
+      const { ingestFalco } = await import('./detectors.js');
+      await ingestFalco(deps.db, deps.falco, Buffer.concat(chunks).toString('utf8'), {
+        timestamp: c.req.header('x-collector-timestamp') ?? '', nonce: c.req.header('x-collector-nonce') ?? '', signature: c.req.header('x-collector-signature') ?? '',
+      });
+      return c.body(null, 204, NO_STORE);
+    } catch { return c.text('Rejected', 400, NO_STORE); }
+  });
+  return app;
+}

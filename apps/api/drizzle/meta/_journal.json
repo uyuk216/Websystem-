@@ -225,6 +225,13 @@
       "when": 1792838888536,
       "tag": "0031_security_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792838888537,
+      "tag": "0032_security_distribution",
+      "breakpoints": true
     }
   ]
 }

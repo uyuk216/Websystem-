@@ -14,8 +14,8 @@ import { ensureAccountOwner } from '../src/teams/teams.js';
 import { createSession } from '../src/auth/sessions.js';
 import { createApp } from '../src/http/app.js';
 import { createApp as createAppRecord } from '../src/apps/apps.js';
-import { restart, rollback } from '../src/apps/deployments.js';
-import { buildRunSpec, rolloutDynamic, type DynamicRuntime } from '../src/ingest/dynamic.js';
+import { restart, rollback as rollbackReal } from '../src/apps/deployments.js';
+import { buildRunSpec, rolloutDynamic as rolloutDynamicReal, type DynamicRuntime } from '../src/ingest/dynamic.js';
 import { transitionUsageState } from '../src/usage/state.js';
 import { buildSignal } from '../src/security/signals.js';
 import { activeBlocks, handleSecuritySignal } from '../src/security/incidents.js';
@@ -257,3 +257,6 @@ describe('起動・再デプロイ・ロールバック・再起動の迂回', (
     expect(f.calls).toContain('start');
   }));
 });
+
+const rollback = (...a: Parameters<typeof rollbackReal>) => rollbackReal(a[0], a[1], a[2], a[3], a[4], { installed: true, check: async () => 'allow' });
+const rolloutDynamic = (...a: Parameters<typeof rolloutDynamicReal>) => rolloutDynamicReal(a[0], a[1], a[2] ? { ...a[2], publication: { installed: true, check: async () => 'allow' } } : undefined);

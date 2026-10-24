@@ -3,6 +3,7 @@ import { PgBoss } from 'pg-boss';
 export type { PgBoss };
 
 export const JOBS = {
+  securityMetrics: 'security.metrics',
   processDeployment: 'deployment.process',
   deleteAppStorage: 'app.delete-storage',
   /** 毎時: 学生証の暗号文の期限切れ・孤児の掃除（Task 4）。 */

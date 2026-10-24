@@ -1,0 +1,5 @@
+# Adapter allowlist, not a claim that deployable Falco syscall rules are installed.
+version: 1
+rules:
+  tenant_mining: high
+  tenant_escape: high

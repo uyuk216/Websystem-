@@ -1,0 +1,4 @@
+import { expect, it } from 'vitest';
+import { authorizeEgress, proxyEgressRules } from '../../src/security/egress.js';
+it('allows only scoped DNS and proxy; no broad internet or IPv6 bypass', () => { const rules = JSON.stringify(proxyEgressRules({ namespace: 'ys-security', podLabel: 'egress', port: 3128 })); expect(rules).not.toContain('0.0.0.0'); expect(rules).not.toContain('::/0'); expect(rules).toContain('kube-dns'); expect(rules).toContain('3128'); });
+it('denies metadata/private, SMTP and non-web protocols at proxy', () => { expect(authorizeEgress({ category: 'public_web', protocol: 'TCP', port: 443, publicDestination: true })).toBe(true); for (const port of [25, 22, 5432]) expect(authorizeEgress({ category: 'public_web', protocol: 'TCP', port, publicDestination: true })).toBe(false); expect(authorizeEgress({ category: 'public_web', protocol: 'TCP', port: 443, publicDestination: false })).toBe(false); });

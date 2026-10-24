@@ -12,7 +12,7 @@ import { giveStudent } from '../../api/test/helpers/grants.js';
 import { createApp } from '../../api/src/apps/apps.js';
 import { jstMonthKey, MONTHLY_LIMIT_MINUTES } from '../../api/src/usage/runtime-hours.js';
 import { sleepIdleApps } from '../../api/src/apps/wake.js';
-import { rolloutDynamic, buildRunSpec, type DynamicRuntime } from '../../api/src/ingest/dynamic.js';
+import { rolloutDynamic as rolloutDynamicReal, buildRunSpec, type DynamicRuntime } from '../../api/src/ingest/dynamic.js';
 import { closeLockers, holdWakeLock, openLocker } from '../../api/test/helpers/lockdb.js';
 import { randomBytes } from 'node:crypto';
 import { connect } from 'node:net';
@@ -498,3 +498,5 @@ describe('fix round 2', () => {
     expect(fd.state.starts).toBe(0);
   }));
 });
+
+const rolloutDynamic = (...a: Parameters<typeof rolloutDynamicReal>) => rolloutDynamicReal(a[0], a[1], a[2] ? { ...a[2], publication: { installed: true, check: async () => 'allow' } } : undefined);

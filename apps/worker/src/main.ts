@@ -85,6 +85,7 @@ if (runtime) {
     startScheduledBackups(db, storage, runtime);
   }
 }
+console.warn('worker: security metrics/egress NOT INSTALLED; disabled (inject adapters before scheduling security.metrics)');
 console.log('worker: waiting for jobs');
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {

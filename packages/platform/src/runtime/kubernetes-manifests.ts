@@ -1,3 +1,4 @@
+import { proxyEgressRules, type EgressProxy } from '../security/egress.js';
 import { assertUuid, type AppRunSpec } from './driver.js';
 
 export const METADATA_IP_CIDR = '169.254.169.254/32';
@@ -33,6 +34,7 @@ export function workloadName(appId: string, deploymentId: string): string {
 export interface ManifestOptions {
   /** RuntimeClass for app pods. Null omits it (development clusters without gVisor only). */
   runtimeClassName?: string | null;
+  egressProxy?: EgressProxy;
 }
 
 export function buildKubernetesManifests(spec: AppRunSpec, opts: ManifestOptions = {}): object[] {
@@ -109,7 +111,7 @@ export function buildKubernetesManifests(spec: AppRunSpec, opts: ManifestOptions
             ports: [{ protocol: 'TCP', port: spec.port }],
           },
         ],
-        egress: [
+        egress: opts.egressProxy ? proxyEgressRules(opts.egressProxy) : [
           // DNS only via kube-system.
           {
             to: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } } }],

@@ -31,7 +31,11 @@
     "./security-client-ip": "./src/security/client-ip.ts",
     "./security-config": "./src/security/config.ts",
     "./security-gate-server": "./src/security/internal-server.ts",
-    "./security-notifications": "./src/security/notifications.ts"
+    "./security-notifications": "./src/security/notifications.ts",
+    "./security-detectors": "./src/security/detectors.ts",
+    "./security-thresholds": "./src/security/thresholds.ts",
+    "./security-browsing": "./src/security/safe-browsing.ts",
+    "./security-distribution": "./src/security/file-distribution.ts"
   },
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env.development --import tsx --watch src/server.ts",

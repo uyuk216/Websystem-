@@ -12,7 +12,7 @@ import { ensureAccountOwner } from '../src/teams/teams.js';
 import { giveStudent } from './helpers/grants.js';
 import { createApp } from '../src/apps/apps.js';
 import { createDeployment } from '../src/apps/deployments.js';
-import { deleteAppStorage, processDeployment } from '../src/ingest/publish.js';
+import { deleteAppStorage, processDeployment as processDeploymentReal } from '../src/ingest/publish.js';
 
 const env = {
   S3_ENDPOINT: process.env.S3_ENDPOINT ?? 'http://localhost:9000',
@@ -76,3 +76,5 @@ describe('dynamic deployment build', () => {
     await deleteAppStorage(storage, appId);
   }));
 });
+
+const processDeployment = (...a: Parameters<typeof processDeploymentReal>) => processDeploymentReal(a[0], a[1], a[2], { ...a[3], publication: { installed: true, check: async () => 'allow' } });

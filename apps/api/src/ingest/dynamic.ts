@@ -1,3 +1,4 @@
+import { unavailablePublication, type PublicationPolicy } from '../security/safe-browsing.js';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -59,6 +60,7 @@ export const CONTAINER_PORT = 8080;
 
 /** What the rollout needs to run apps. `envKey` is mandatory: apps cannot start without their decrypted env vars. */
 export interface DynamicRuntime {
+  publication?: PublicationPolicy;
   driver: RuntimeDriver;
   envKey: Buffer;
   health?: HealthOptions;
@@ -139,6 +141,10 @@ export async function rolloutDynamic(db: Db, deploymentId: string, rt?: DynamicR
     .where(sql`${deployments.id} = ${deploymentId} AND ${deployments.status} = 'processing'`));
   if (!d?.imageRef) return;
   const { appId, imageRef } = d;
+  if (await (rt.publication ?? unavailablePublication).check(appId) !== 'allow') {
+    await withSystem(db, tx => tx.update(deployments).set({ status: 'held_for_review', message: 'deploy.heldForReview' }).where(eq(deployments.id, deploymentId)));
+    return;
+  }
 
   // Held through start, health check and switch: the sleeper and the edge's wake never see a half-started app.
   const body = async (): Promise<void> => {
@@ -182,6 +188,11 @@ export async function rolloutDynamic(db: Db, deploymentId: string, rt?: DynamicR
         }).where(sql`${deployments.id} = ${deploymentId} AND ${deployments.status} = 'processing'`);
       });
       await removeImage(imageRef).catch(() => undefined);
+      return;
+    }
+    if (await (rt.publication ?? unavailablePublication).check(appId) !== 'allow') {
+      await driver.stopDeployment(appId, deploymentId);
+      await withSystem(db, tx => tx.update(deployments).set({ status: 'held_for_review', message: 'deploy.heldForReview' }).where(eq(deployments.id, deploymentId)));
       return;
     }
     const stopOld = await withSystem(db, async (tx): Promise<string[] | 'blocked' | null> => {

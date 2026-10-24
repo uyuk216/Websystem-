@@ -1,3 +1,4 @@
+import { unavailablePublication, type PublicationPolicy } from '../security/safe-browsing.js';
 import { randomUUID } from 'node:crypto';
 import { Transform, type Readable } from 'node:stream';
 import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
@@ -19,7 +20,7 @@ export interface JobQueue {
 }
 export type DeploySource = 'upload' | 'cli' | 'github';
 export type CreateDeploymentError = 'not_found' | 'forbidden' | 'too_large' | 'invalid';
-export type RollbackError = 'not_found' | 'forbidden' | 'invalid_state' | 'start_failed' | 'runtime_limit' | 'security_blocked';
+export type RollbackError = 'not_found' | 'forbidden' | 'invalid_state' | 'start_failed' | 'runtime_limit' | 'security_blocked' | 'inspection_pending';
 
 export const DOWNLOAD_TIMEOUT_MS = 120_000;
 
@@ -173,7 +174,7 @@ export async function listDeployments(db: Db, accountId: string, appId: string) 
  * that does not come up leaves everything as it was (`start_failed`).
  */
 export async function rollback(
-  db: Db, accountId: string, appId: string, deploymentId: string, rt?: DynamicRuntime,
+  db: Db, accountId: string, appId: string, deploymentId: string, rt?: DynamicRuntime, publication?: PublicationPolicy,
 ): Promise<{ ok: true } | { error: RollbackError; reason?: string; logs?: string[] }> {
   if (!UUID.test(appId) || !UUID.test(deploymentId)) return { error: 'not_found' };
   const pre = await withAccount(db, accountId, async (tx) => {
@@ -187,6 +188,7 @@ export async function rollback(
     return { ownerId: a.ownerId, kind: a.kind, imageRef: d.imageRef, wasLive: d.status === 'live' };
   });
   if (pre.error) return { error: pre.error };
+  if (await (publication ?? rt?.publication ?? unavailablePublication).check(appId) !== 'allow') return { error: 'inspection_pending' };
 
   let started = false;
   if (pre.kind === 'dynamic') {
@@ -225,6 +227,10 @@ export async function rollback(
   if (await isAppBlocked(db, appId)) {
     if (started && !pre.wasLive && rt) await rt.driver.stopDeployment(appId, deploymentId).catch(() => undefined);
     return { error: 'security_blocked', reason: 'deploy.error.security_blocked' };
+  }
+  if (await (publication ?? rt?.publication ?? unavailablePublication).check(appId) !== 'allow') {
+    if (started && !pre.wasLive && rt) await rt.driver.stopDeployment(appId, deploymentId);
+    return { error: 'inspection_pending' };
   }
   const switched = await withSystem(db, async (systemTx) => {
     await systemTx.select({ id: apps.id }).from(apps).where(eq(apps.id, appId)).for('update');

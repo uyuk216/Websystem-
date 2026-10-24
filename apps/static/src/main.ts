@@ -1,3 +1,4 @@
+import { createDistributionObserver } from 'api/security-distribution';
 import { serve } from '@hono/node-server';
 import { Waker, createStorage, loadStorageConfig } from 'platform';
 import { createDb } from 'api/db';
@@ -54,7 +55,7 @@ const stopRecheck = connections.start(db, 1000);
 // 遮断の commit 通知が来たら、すぐ再照合する（通知が欠けても、上の定期の再照合が拾う）。
 const listener = await sql.listen('security_block', () => { void connections.recheck(db); }).catch((e: unknown) => { console.error('security listen failed', e); return null; });
 
-const app = createStaticApp({ db, storage: storage.sites, meter, baseDomain, dynamic, accessLog, trustedProxyHops, security: { hashKey: securityKey, connections } });
+const app = createStaticApp({ db, storage: storage.sites, meter, baseDomain, dynamic, accessLog, trustedProxyHops, distribution: process.env.SECURITY_DISTRIBUTION_MODE === 'enforce' ? createDistributionObserver(db, securityKey) : undefined, reportOrigin: process.env.APP_ORIGIN ?? 'http://localhost:3000', security: { hashKey: securityKey, connections } });
 const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`static listening on :${info.port} (*.${baseDomain})`);
 });

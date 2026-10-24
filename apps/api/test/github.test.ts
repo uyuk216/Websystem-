@@ -9,7 +9,7 @@ import { withTestDb, type TestDb } from './helpers/db.js';
 import { accounts, apps, deployments, githubDeliveries, githubInstallationLinks, githubOauthStates } from '../src/db/schema.js';
 import { ensureAccountOwner } from '../src/teams/teams.js';
 import { createApp } from '../src/apps/apps.js';
-import { deleteAppStorage, processDeployment } from '../src/ingest/publish.js';
+import { deleteAppStorage, processDeployment as processDeploymentReal } from '../src/ingest/publish.js';
 import { createApp as createHttpApp } from '../src/http/app.js';
 import { createFakeMailer } from './helpers/fake-mailer.js';
 import { createApiToken } from '../src/apps/api-tokens.js';
@@ -316,3 +316,5 @@ describe('github', () => {
     }
   }));
 });
+
+const processDeployment = (...a: Parameters<typeof processDeploymentReal>) => processDeploymentReal(a[0], a[1], a[2], { ...a[3], publication: { installed: true, check: async () => 'allow' } });

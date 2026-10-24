@@ -455,4 +455,7 @@ export const ja = {
   'security.identity': 'メールのコードで本人確認',
   'security.email': 'メールアドレス',
   'security.code': '確認コード',
+  'report.title': 'このサイトを通報',
+  'report.sent': '通報を受け付けました。',
+  'report.category': '通報の種類',
 } as const;

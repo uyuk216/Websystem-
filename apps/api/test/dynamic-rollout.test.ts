@@ -10,9 +10,9 @@ import { accounts, apps, deployments, owners, teamMembers, teams } from '../src/
 import { ensureAccountOwner } from '../src/teams/teams.js';
 import { giveStudent } from './helpers/grants.js';
 import { createApp } from '../src/apps/apps.js';
-import { createDeployment, listDeployments, rollback } from '../src/apps/deployments.js';
+import { createDeployment, listDeployments, rollback as rollbackReal } from '../src/apps/deployments.js';
 import { setEnvVar } from '../src/apps/env-vars.js';
-import { deleteAppStorage, processDeployment } from '../src/ingest/publish.js';
+import { deleteAppStorage, processDeployment as processDeploymentReal } from '../src/ingest/publish.js';
 import { createDynamicRuntime, type DynamicRuntime } from '../src/ingest/dynamic.js';
 
 const env = {
@@ -205,3 +205,6 @@ describe('rollback start_failed body', () => {
     expect(r2).not.toHaveProperty('reason');
   }), 240_000);
 });
+
+const processDeployment = (...a: Parameters<typeof processDeploymentReal>) => processDeploymentReal(a[0], a[1], a[2], { ...a[3], publication: { installed: true, check: async () => 'allow' } });
+const rollback = (...a: Parameters<typeof rollbackReal>) => rollbackReal(a[0], a[1], a[2], a[3], a[4], { installed: true, check: async () => 'allow' });

@@ -1,0 +1,5 @@
+import { gzipSync } from 'node:zlib';
+import { expect, it } from 'vitest';
+import { reportResponse } from '../src/report-link.js';
+it('decorates compressed/chunked HTML without scripts and removes invalid validators', async () => { const r = reportResponse(new Response(gzipSync('<html>tenant</html>'), { headers: { 'Content-Type': 'text/html', 'Content-Encoding': 'gzip', 'Content-Length': '20', ETag: 'strong', 'Content-Security-Policy': "default-src 'none'" } }), 'GET', 'https://platform.example', 'app'); expect(await r.text()).toContain('Report abuse'); expect(r.headers.get('etag')).toBeNull(); expect(r.headers.get('content-length')).toBeNull(); expect(r.headers.get('content-security-policy')).toBe("default-src 'none'"); });
+it('provides headers for non-HTML, HEAD and partial/304 without adding a body', async () => { for (const status of [200, 206, 304]) { const r = reportResponse(new Response(status === 304 ? null : 'file', { status, headers: { 'Content-Type': 'application/octet-stream' } }), 'GET', 'https://platform.example', 'app'); expect(r.headers.get('link')).toContain('/ja/report'); expect(await r.text()).toBe(status === 304 ? '' : 'file'); } });

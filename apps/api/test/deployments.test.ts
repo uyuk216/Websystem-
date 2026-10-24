@@ -9,8 +9,8 @@ import { withTestDb, type TestDb } from './helpers/db.js';
 import { accounts, apps, deployments, teamMembers } from '../src/db/schema.js';
 import { createTeam, ensureAccountOwner } from '../src/teams/teams.js';
 import { createApp, deleteApp, updateApp } from '../src/apps/apps.js';
-import { createDeployment, listDeployments, rollback } from '../src/apps/deployments.js';
-import { deleteAppStorage, processDeployment, sweepStaleDeployments } from '../src/ingest/publish.js';
+import { createDeployment, listDeployments, rollback as rollbackReal } from '../src/apps/deployments.js';
+import { deleteAppStorage, processDeployment as processDeploymentReal, sweepStaleDeployments } from '../src/ingest/publish.js';
 import { createApp as createHttpApp } from '../src/http/app.js';
 import { createFakeMailer } from './helpers/fake-mailer.js';
 import { createSession } from '../src/auth/sessions.js';
@@ -274,7 +274,7 @@ describe('deployments', () => {
     const b = await acct(db);
     const jobs: { name: string; data: unknown }[] = [];
     const q = { send: async (name: string, data: object) => { jobs.push({ name, data }); return 'j'; } };
-    const app = createHttpApp({ db, mailer: createFakeMailer(), storage, queue: q, config: { emailEncKey: Buffer.alloc(32, 1), emailHashKey: Buffer.alloc(32, 2), adminEmail: 'x@example.com', appOrigin: 'https://app.example.com', rpId: 'app.example.com' } });
+    const app = createHttpApp({ publication: { installed: true, check: async () => 'allow' }, db, mailer: createFakeMailer(), storage, queue: q, config: { emailEncKey: Buffer.alloc(32, 1), emailHashKey: Buffer.alloc(32, 2), adminEmail: 'x@example.com', appOrigin: 'https://app.example.com', rpId: 'app.example.com' } });
     const ck = `sid=${(await createSession(db, a.id, 'x')).token}`;
     const bk = `sid=${(await createSession(db, b.id, 'x')).token}`;
     const form = (name: string, data: Buffer, field = 'file') => { const f = new FormData(); f.append(field, new Blob([new Uint8Array(data)]), name); return f; };
@@ -355,3 +355,6 @@ describe('deployments', () => {
     expect(await deleteApp(db, a.id, appId, { enqueueStorageCleanup: async () => { throw new Error('queue down'); } })).toEqual({ ok: true });
   }));
 });
+
+const processDeployment = (...a: Parameters<typeof processDeploymentReal>) => processDeploymentReal(a[0], a[1], a[2], { ...a[3], publication: { installed: true, check: async () => 'allow' } });
+const rollback = (...a: Parameters<typeof rollbackReal>) => rollbackReal(a[0], a[1], a[2], a[3], a[4], { installed: true, check: async () => 'allow' });

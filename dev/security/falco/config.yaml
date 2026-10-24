@@ -1,0 +1,8 @@
+# Contract only; no daemon/image/driver is installed by this repository.
+mode: disabled
+collector:
+  bind: 127.0.0.1
+  max_body_bytes: 65536
+  signature: hmac-sha256
+  max_clock_skew_ms: 60000
+# Production must inject a shared atomic ReplayStore and authoritative runtime resolver.

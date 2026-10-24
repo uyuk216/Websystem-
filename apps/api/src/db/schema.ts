@@ -586,3 +586,9 @@ export const securityNotifications = pgTable('security_notifications', {
   subject: text('subject').notNull(), body: text('body').notNull(),
   mailedAt: timestamp('mailed_at', { withTimezone: true }), createdAt: createdAt(),
 });
+
+/** Daily keyed path digests only; deleted within 30 days. Never copied to WORM. */
+export const securityDistributionSamples = pgTable('security_distribution_samples', {
+  id: id(), appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  day: text('day').notNull(), fileHash: text('file_hash').notNull(), bytes: bigint('bytes', { mode: 'number' }).notNull(), external: boolean('external').notNull(), observedAt: timestamp('observed_at', { withTimezone: true }).notNull(),
+});

@@ -21,3 +21,6 @@ export * from './pii/ingest.js';
 export * from './pii/store.js';
 export * from './verification/provider.js';
 export * from './verification/manual.js';
+export * from './security/telemetry.js';
+export * from './security/falco.js';
+export * from './security/egress.js';

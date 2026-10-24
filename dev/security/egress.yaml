@@ -1,0 +1,7 @@
+# Inert configuration contract; nothing is installed/applied.
+mode: disabled
+metrics: not-installed
+proxy: not-installed
+unsupported: [udp-tunnels, arbitrary-tcp, ipv6-tunnels]
+tls_inspection: false
+# Enforce requires proxy destination validation AND the generated NetworkPolicy.

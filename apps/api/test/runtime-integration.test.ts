@@ -8,8 +8,8 @@ import { withTestDb, type TestDb } from './helpers/db.js';
 import { accounts, apps, deployments, runtimeMinutes, runtimeUsage } from '../src/db/schema.js';
 import { ensureAccountOwner } from '../src/teams/teams.js';
 import { giveStudent } from './helpers/grants.js';
-import { rollback } from '../src/apps/deployments.js';
-import { rolloutDynamic, type DynamicRuntime } from '../src/ingest/dynamic.js';
+import { rollback as rollbackReal } from '../src/apps/deployments.js';
+import { rolloutDynamic as rolloutDynamicReal, type DynamicRuntime } from '../src/ingest/dynamic.js';
 import { MONTHLY_LIMIT_MINUTES, jstMonthKey, purgeRuntimeMinutes, startRuntimeMetering } from '../src/usage/runtime-hours.js';
 
 let n = 0;
@@ -112,3 +112,6 @@ describe('runtime minutes upkeep', () => {
     stop();
   });
 });
+
+const rollback = (...a: Parameters<typeof rollbackReal>) => rollbackReal(a[0], a[1], a[2], a[3], a[4], { installed: true, check: async () => 'allow' });
+const rolloutDynamic = (...a: Parameters<typeof rolloutDynamicReal>) => rolloutDynamicReal(a[0], a[1], a[2] ? { ...a[2], publication: { installed: true, check: async () => 'allow' } } : undefined);

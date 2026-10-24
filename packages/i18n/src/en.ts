@@ -457,4 +457,7 @@ export const en = {
   'security.identity': 'Verify identity with email code',
   'security.email': 'Email address',
   'security.code': 'Verification code',
+  'report.title': 'Report this site',
+  'report.sent': 'Your report was received.',
+  'report.category': 'Report category',
 } satisfies Record<keyof typeof ja, string>;

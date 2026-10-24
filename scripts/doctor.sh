@@ -61,3 +61,6 @@ if [ "$MISSING" -ne 0 ]; then
   exit 1
 fi
 echo "doctor: すべて揃っています"
+echo '[NOT INSTALLED] Phase 6 Falco/Linux driver: disabled; no collector/runtime visibility verified'
+echo '[NOT INSTALLED] Phase 6 runtime metrics and mandatory egress proxy: disabled; bypass prevention unverified'
+echo '[NOT INSTALLED] Phase 6 Safe Browsing and durable distribution collector: no external URL inspection; new publication held'

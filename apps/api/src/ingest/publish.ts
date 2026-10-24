@@ -1,3 +1,4 @@
+import { unavailablePublication, type PublicationPolicy } from '../security/safe-browsing.js';
 import { eq, sql } from 'drizzle-orm';
 import { ArchiveError, BUCKETS, JOBS, appPrefix, extractArchive, removeAppImages, type ArchiveFormat, type Storage } from 'platform';
 import { UUID } from '../auth/cross-device.js';
@@ -34,7 +35,7 @@ async function publishFiles(storage: Storage, sourceKey: string, format: Archive
  * Every outcome, including unexpected errors, is recorded on the deployment (status + i18n message key).
  */
 export async function processDeployment(
-  db: Db, storage: Storage, deploymentId: string, opts: { lastAttempt?: boolean; runtime?: DynamicRuntime } = {},
+  db: Db, storage: Storage, deploymentId: string, opts: { lastAttempt?: boolean; runtime?: DynamicRuntime; publication?: PublicationPolicy } = {},
 ): Promise<void> {
   if (!UUID.test(deploymentId)) return;
   const claimed = await withSystem(db, async (tx) => {
@@ -59,7 +60,7 @@ export async function processDeployment(
     if (claimed.kind === 'dynamic') {
       return await processDynamicDeployment(db, storage, {
         deploymentId, appId, sourceKey, format, stripTop, publishDir: claimed.publish_dir,
-      }, opts.runtime);
+      }, opts.runtime ? { ...opts.runtime, publication: opts.publication ?? opts.runtime.publication } : undefined);
     }
     const out = await inspect(storage, sourceKey, format, claimed.publish_dir, stripTop);
     if (out.kind === 'failed') return await finish({ status: 'failed', message: out.message });
@@ -72,6 +73,8 @@ export async function processDeployment(
     if (out.kind === 'held') return await finish({ status: 'held_for_review', message: 'deploy.heldForReview' });
 
     await publishFiles(storage, sourceKey, format, claimed.publish_dir, siteKey, stripTop);
+    const verdict = await (opts.publication ?? unavailablePublication).check(appId);
+    if (verdict !== 'allow') return await finish({ status: 'held_for_review', message: 'deploy.heldForReview' });
     await withSystem(db, async (tx) => {
       // Serialises with other finishing deployments and with rollbacks of this app.
       const [app] = await tx.select({ id: apps.id, rolledBackAt: apps.rolledBackAt }).from(apps).where(eq(apps.id, appId)).for('update');

@@ -1,3 +1,5 @@
+import type { PublicationPolicy } from '../security/safe-browsing.js';
+import { submitReport } from '../security/reports.js';
 import { userIncidents, submitAppeal } from '../security/appeals.js';
 import { userNotifications } from '../security/notifications.js';
 import { trustedClientIp } from '../security/client-ip.js';
@@ -80,6 +82,7 @@ export interface AppDeps {
   uploadMaxBytes?: number;
   /** Dynamic-app runtime (container driver + env key); rollback of dynamic apps needs it. */
   runtime?: DynamicRuntime;
+  publication?: PublicationPolicy;
   /** GitHub App integration; the webhook and PATCH /apps/:id/github are registered only when this is given. */
   github?: {
     webhookSecret: string;
@@ -138,6 +141,10 @@ export function createApp(deps?: AppDeps): Hono {
     await next();
   });
   app.get('/healthz', (c) => c.json({ ok: true }));
+  if (deps) app.post('/security/reports', bodyLimit({ maxSize: 4096 }), requireSession(deps.db), async c => {
+    const result = await submitReport(deps.db, c.get('accountId'), await c.req.json().catch(() => null));
+    return c.json({ result }, result === 'ok' ? 202 : result === 'rate_limited' ? 429 : result === 'not_found' ? 404 : 400);
+  });
   if (deps) {
     // History is best-effort: a failure must not fail an already-established login.
     const logLogin = (c: Context, accountId: string, method: 'passkey' | 'email', notify = true) =>
@@ -447,7 +454,7 @@ export function createApp(deps?: AppDeps): Hono {
     if (deps.storage && deps.queue) {
       const storage = deps.storage;
       const queue = deps.queue;
-      const depStatus = { not_found: 404, forbidden: 403, too_large: 413, invalid: 400, invalid_state: 409, start_failed: 502, runtime_limit: 409, security_blocked: 423 } as const;
+      const depStatus = { not_found: 404, forbidden: 403, too_large: 413, invalid: 400, invalid_state: 409, start_failed: 502, runtime_limit: 409, security_blocked: 423, inspection_pending: 503 } as const;
       // Multipart overhead on top of the archive limit; the exact archive size is enforced while streaming.
       const uploadLimit = bodyLimit({
         maxSize: (deps.uploadMaxBytes ?? STATIC_LIMITS.storageBytes) + 1024 * 1024,
@@ -480,13 +487,13 @@ export function createApp(deps?: AppDeps): Hono {
         return c.json({ deployments: await listDeployments(deps.db, c.get('accountId'), a.id) });
       });
       app.post('/apps/:id/deployments/:did/rollback', session, async (c) => {
-        const r = await rollback(deps.db, c.get('accountId'), c.req.param('id'), c.req.param('did'), deps.runtime);
+        const r = await rollback(deps.db, c.get('accountId'), c.req.param('id'), c.req.param('did'), deps.runtime, deps.publication);
         return 'error' in r ? c.json(r, depStatus[r.error]) : c.json(r);
       });
     }
     app.post('/apps/:id/restart', session, async (c) => {
       const r = await restart(deps.db, c.get('accountId'), c.req.param('id'), deps.runtime);
-      return 'error' in r ? c.json(r, ({ not_found: 404, forbidden: 403, invalid_state: 409, start_failed: 502, runtime_limit: 409, security_blocked: 423 } as const)[r.error]) : c.json(r);
+      return 'error' in r ? c.json(r, ({ not_found: 404, forbidden: 403, invalid_state: 409, start_failed: 502, runtime_limit: 409, security_blocked: 423, inspection_pending: 503 } as const)[r.error]) : c.json(r);
     });
     app.get('/apps/:id/access-logs', session, async (c) => {
       const r = await listAccessLogs(deps.db, c.get('accountId'), c.req.param('id'), Number(c.req.query('limit') ?? 100));

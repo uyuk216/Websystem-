@@ -5,7 +5,7 @@ import { runNextOutbox, type OutboxKind } from './outbox.js';
 import type { securityOutbox } from '../db/schema.js';
 import type { WakeLock } from '../apps/wake.js';
 
-export type OutboxHandlers = Partial<Record<OutboxKind, (payload: Record<string, unknown>, row: typeof securityOutbox.$inferSelect, tx: Tx) => Promise<void>>>;
+export type OutboxHandlers = Partial<Record<OutboxKind, (payload: Record<string, unknown>, row: typeof securityOutbox.$inferSelect, tx: Tx, now: Date) => Promise<void>>>;
 
 /** コンテナ停止の副作用。通知・配送の handler は後続の Task が足す。 */
 export function stopAppHandlers(driver: Pick<RuntimeDriver, 'stop'>, lock?: WakeLock): OutboxHandlers {
@@ -30,7 +30,7 @@ export async function drainSecurityOutbox(db: Db, handlers: OutboxHandlers, opts
   const kinds = (Object.keys(handlers) as OutboxKind[]).filter((k) => handlers[k]);
   const out: DrainResult = { done: 0, failed: 0 };
   for (let i = 0; i < (opts.limit ?? 50); i++) {
-    const r = await withSystem(db, (tx) => runNextOutbox(tx, kinds, now, async (row) => { await handlers[row.kind]!(row.payload as Record<string, unknown>, row, tx); }, opts.queue));
+    const r = await withSystem(db, (tx) => runNextOutbox(tx, kinds, now, async (row) => { await handlers[row.kind]!(row.payload as Record<string, unknown>, row, tx, now); }, opts.queue));
     if (r === null) break;
     out[r]++;
   }
